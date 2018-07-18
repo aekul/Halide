@@ -232,7 +232,6 @@ public:
         transpose(coords) = f.func(swizzled_coords);
 
         return {transpose, f.h, f.w};
-
     }
 
     // Generate a random stage using f as an input.

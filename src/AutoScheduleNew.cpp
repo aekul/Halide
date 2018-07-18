@@ -45,10 +45,10 @@ using std::pair;
 
 struct Predictor {
   py::scoped_interpreter python;
-
   float predict(const std::vector<float>& schedule_features, const std::vector<float>& pipeline_features) {
-    auto infer = py::module::import("infer").attr("infer");
-    return infer(schedule_features, pipeline_features).cast<float>();
+    // auto infer = py::module::import("infer").attr("infer");
+    // return infer(schedule_features, pipeline_features).cast<float>();
+    return 0.0f;
   }
 };
 
@@ -1831,7 +1831,6 @@ struct PartialScheduleNode {
             }
         }
     }
-
 };
 
 struct State {
@@ -2573,5 +2572,5 @@ void autoschedule_test() {
 
 }
 
-}
-}
+} // namespace Internal
+} // namespace Halide
