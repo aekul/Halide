@@ -3,8 +3,8 @@
 #include <cstdio>
 #include <atomic>
 
-#include "halide_benchmark.h"
 #include "HalideBuffer.h"
+#include "halide_benchmark.h"
 
 using namespace Halide::Runtime;
 using namespace Halide::Tools;
@@ -21,12 +21,12 @@ size_t peak;
 
 void *my_malloc(void *ucon, size_t sz) {
     counter++;
-    if (sz > peak) peak = sz;
+    if (sz > peak) {peak = sz};
 
     return halide_default_malloc(ucon, sz);
 }
 
-int main(int argc, char **argv) {
+int main() {
     Buffer<float> output(2000, 2000, 3);
 
     for (int y = 0; y < output.height(); y++) {

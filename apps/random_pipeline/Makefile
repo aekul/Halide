@@ -9,6 +9,12 @@ HL_SEED ?=0
 HL_BEAM_SIZE ?=2
 ID = $(HL_TARGET)/pipeline_$(PIPELINE_SEED)_$(PIPELINE_STAGES)/schedule_$(HL_SEED)_$(HL_RANDOM_DROPOUT)_$(HL_BEAM_SIZE)
 
+# PY_INCLUDES = $(shell python3-config --includes)
+# CXX_FLAGS += $(PY_INCLUDES)
+PY_LIBS = $(shell python3-config --ldflags) -fno-lto
+LD_FLAGS += $(PY_LIBS)
+
+
 ifeq ($(HL_SEED), root)
 AUTO_SCHEDULE=false
 else
