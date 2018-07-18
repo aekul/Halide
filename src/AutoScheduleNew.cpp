@@ -22,6 +22,12 @@
 #include <iostream>
 #include <random>
 
+#include <pybind11/embed.h>
+#include <pybind11/numpy.h>
+#include <pybind11/stl.h>
+
+namespace py = pybind11;
+
 // TODO: overview of algorithm
 
 namespace Halide {
@@ -36,6 +42,15 @@ using std::vector;
 using std::map;
 using std::set;
 using std::pair;
+
+struct Predictor {
+  py::scoped_interpreter python;
+
+  float predict(const std::vector<float>& schedule_features, const std::vector<float>& pipeline_features) {
+    auto infer = py::module::import("infer").attr("infer");
+    return infer(schedule_features, pipeline_features).cast<float>();
+  }
+};
 
 // This should be a function f s.t
 // f(0) = 0
@@ -1828,7 +1843,7 @@ struct State {
 
     static int cost_calculations;
 
-    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params, ThroughputPredictorPipeline *throughput_predictor,  bool verbose = false) {
+    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params, Predictor *predictor,  bool verbose = false) {
         map<Function, const PartialScheduleNode *, Function::Compare> compute_site;
         map<Function, vector<ScheduleFeatures>, Function::Compare> features;
         root.compute_features(dag, params, compute_site, 1, 1, nullptr, root, &features);
@@ -1865,28 +1880,17 @@ struct State {
         cost = 0;
 
         // use either deep network or linear model to predict cost
-        if (throughput_predictor) {
-            // for complicated indexing reasons we do zero padding here
-            // count number of scheduled stages
+        if (predictor) {
             int num_stages = 0;
-            int min_stages = 22;
 
             for (auto p : features) {
                 num_stages += p.second.size();
             }
 
-            int padded_stages = std::max(num_stages, min_stages);
-            int lpad = std::max(0, (padded_stages - num_stages)/2);
-
             const int pipeline_feat_size = 399;
             const int schedule_feat_size = 18;
-            const int batch_size = 1;
 
-            Buffer<float> pipeline_features(batch_size, 56, 7, padded_stages); // just predicting on batch size of 1 pipeline
-            pipeline_features.fill(0.0f);
-            Buffer<float> schedule_features(batch_size, 18, padded_stages);
-            schedule_features.fill(0.0f);
-            Buffer<float> network_output(batch_size);
+            std::vector<float> pipeline_features;
 
             // index of current stage whose features we are reading
             int stage = 0;
@@ -1897,13 +1901,8 @@ struct State {
                     const auto &s = *it;
                     const int *pipeline_feats = (const int *)(&(s.features));
 
-                    // skip the first 7 features
-                    for (int i = 7; i < pipeline_feat_size; i++) {
-                        int x = (i-7)/7;
-                        int y = (i-7)%7;
-                        pipeline_features(0, x, y, lpad+stage) = pipeline_feats[i];
-                        pipeline_features(0, x, y, lpad+stage) -= throughput_predictor->feature_stats.pipeline_mean(x,y);
-                        pipeline_features(0, x, y, lpad+stage) /= throughput_predictor->feature_stats.pipeline_std(x,y);
+                    for (int i = 0; i < pipeline_feat_size; i++) {
+                        pipeline_features.push_back(pipeline_feats[i]);
                     }
 
                     stage += 1;
@@ -1911,6 +1910,7 @@ struct State {
             }
 
             stage = 0;
+            std::vector<float> schedule_features;
 
             // load schedule features into input buffer
             for (const auto &n : dag.nodes) {
@@ -1918,22 +1918,17 @@ struct State {
                 const auto &feats = features.at(n.func);
                 for (auto it = feats.rbegin(); it != feats.rend(); it++) {
                     const auto &feat = *it;
-                    if (feat.points_computed_total + feat.inlined_calls > 1.5*feat.points_computed_minimum) return false;
+                    if (feat.points_computed_total + feat.inlined_calls > 10*feat.points_computed_minimum) return false;
                     const int64_t *sched_stats = (const int64_t *)(&feat);
                     for (int i = 0; i < schedule_feat_size; i++) {
-                        schedule_features(0, i, lpad+stage) = std::log(1+sched_stats[i]);
-                        schedule_features(0, i, lpad+stage) -= throughput_predictor->feature_stats.schedule_mean(i);
-                        schedule_features(0, i, lpad+stage) /= throughput_predictor->feature_stats.schedule_std(i);
+                        schedule_features.push_back(std::log(1+sched_stats[i]));
                     }
                     stage += 1;
                 }
             }
 
-            throughput_predictor->set_inputs(pipeline_features, schedule_features);
-            throughput_predictor->prediction.realize(network_output);
-
-            cost = -network_output(0,0,0);
-
+            auto prediction = predictor->predict(schedule_features, pipeline_features);
+            cost = -prediction;
         }
 
         if (cost == 0) {
@@ -2069,7 +2064,7 @@ struct State {
 
     void generate_children(const FunctionDAG &dag,
                            const MachineParams &params,
-                           ThroughputPredictorPipeline *throughput_predictor,
+                           Predictor *predictor,
                            std::function<void(State *)> &accept_child) {
         internal_assert(root.is_root());
 
@@ -2092,7 +2087,7 @@ struct State {
             auto child = new State(*this);
             child->root = child->root.inline_func(f, dag);
             child->num_funcs_scheduled++;
-            if (child->calculate_cost(dag, params, throughput_predictor)) {
+            if (child->calculate_cost(dag, params, predictor)) {
                 internal_assert(child->root.computes(f)) << "Failed to inline " << f.name() << '\n';
                 num_children++;
                 accept_child(child);
@@ -2106,7 +2101,7 @@ struct State {
             auto child = new State(*this);
             child->root = std::move(n);
             child->num_funcs_scheduled++;
-            if (child->calculate_cost(dag, params, throughput_predictor)) {
+            if (child->calculate_cost(dag, params, predictor)) {
                 internal_assert(child->root.computes(f)) << "Failed to inject realization of " << f.name() << '\n';
                 num_children++;
                 accept_child(child);
@@ -2185,7 +2180,7 @@ struct CompareStates {
 State optimal_schedule(FunctionDAG &dag,
                        vector<Function> outputs,
                        const MachineParams &params,
-                       ThroughputPredictorPipeline *throughput_predictor,
+                       Predictor *predictor,
                        int beam_size) {
     std::priority_queue<std::shared_ptr<State>,
                         std::vector<std::shared_ptr<State>>,
@@ -2246,7 +2241,7 @@ State optimal_schedule(FunctionDAG &dag,
                 return *state;
             }
 
-            state->generate_children(dag, params, throughput_predictor, enqueue_new_children);
+            state->generate_children(dag, params, predictor, enqueue_new_children);
         }
     }
 }
@@ -2285,7 +2280,7 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
     auto w = AutoScheduleModel::load_weights();
     auto stats = AutoScheduleModel::load_stats();
 
-    ThroughputPredictorPipeline throughput_predictor(w, stats);
+    Predictor predictor;
 
     State optimal;
 
@@ -2293,7 +2288,7 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
         // Use a fixed running time
         auto start = std::chrono::steady_clock::now();
         for (size_t beam_size = 1; ; beam_size *= 2) {
-            State s = optimal_schedule(dag, outputs, params, &throughput_predictor, beam_size);
+            State s = optimal_schedule(dag, outputs, params, &predictor, beam_size);
             if (beam_size == 1 || s.cost < optimal.cost) {
                 optimal = s;
             }
@@ -2305,7 +2300,7 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
         }
     } else {
         // Use a fixed beam size
-        optimal = optimal_schedule(dag, outputs, params, &throughput_predictor, beam_size);
+        optimal = optimal_schedule(dag, outputs, params, &predictor, beam_size);
     }
 
     debug(0) << "** Optimal schedule:\n";
@@ -2314,7 +2309,7 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
     debug(0) << "Cost evaluated this many times: " << State::cost_calculations << '\n';
 
     // Just to get the debugging prints to fire
-    optimal.calculate_cost(dag, params, &throughput_predictor, true);
+    optimal.calculate_cost(dag, params, &predictor, true);
 
     // Apply the schedules
     optimal.apply_schedule(dag, params);
@@ -2335,7 +2330,7 @@ void autoschedule_test() {
     Weights w = load_weights();
     Stats stats = load_stats();
 
-    ThroughputPredictorPipeline throughput_predictor(w, stats);
+    Predictor predictor;
 
     Var x("x"), y("y");
 
@@ -2351,10 +2346,10 @@ void autoschedule_test() {
         vector<Function> outputs = {h.function()};
         FunctionDAG dag(outputs, params, target);
 
-        State optimal = optimal_schedule(dag, outputs, params, &throughput_predictor, beam_size);
+        State optimal = optimal_schedule(dag, outputs, params, &predictor, beam_size);
 
         debug(0) << "** Optimal schedule:\n";
-        optimal.calculate_cost(dag, params, &throughput_predictor, true);
+        optimal.calculate_cost(dag, params, &predictor, true);
         optimal.dump();
         debug(0) << '\n';
 
@@ -2385,10 +2380,10 @@ void autoschedule_test() {
 
         vector<Function> outputs = {h.function()};
         FunctionDAG dag(outputs, cheap_memory, target);
-        State optimal = optimal_schedule(dag, outputs, cheap_memory, &throughput_predictor, beam_size);
+        State optimal = optimal_schedule(dag, outputs, cheap_memory, &predictor, beam_size);
 
         debug(0) << "** Optimal schedule:\n";
-        optimal.calculate_cost(dag, params, &throughput_predictor, true);
+        optimal.calculate_cost(dag, params, &predictor, true);
         optimal.dump();
         debug(0) << '\n';
 
@@ -2409,10 +2404,10 @@ void autoschedule_test() {
 
         vector<Function> outputs = {h.function()};
         FunctionDAG dag(outputs, params, target);
-        State optimal = optimal_schedule(dag, outputs, params, &throughput_predictor, beam_size);
+        State optimal = optimal_schedule(dag, outputs, params, &predictor, beam_size);
 
         debug(0) << "** Optimal schedule:\n";
-        optimal.calculate_cost(dag, params, &throughput_predictor, true);
+        optimal.calculate_cost(dag, params, &predictor, true);
         optimal.dump();
         debug(0) << '\n';
 
@@ -2432,10 +2427,10 @@ void autoschedule_test() {
 
         vector<Function> outputs = {h.function()};
         FunctionDAG dag(outputs, params, target);
-        State optimal = optimal_schedule(dag, outputs, params, &throughput_predictor, beam_size);
+        State optimal = optimal_schedule(dag, outputs, params, &predictor, beam_size);
 
         debug(0) << "** Optimal schedule:\n";
-        optimal.calculate_cost(dag, params, &throughput_predictor, true);
+        optimal.calculate_cost(dag, params, &predictor, true);
         optimal.dump();
         debug(0) << '\n';
 
@@ -2462,9 +2457,9 @@ void autoschedule_test() {
         f[N-1].estimate(x, 0, 2048).estimate(y, 0, 2048);
         vector<Function> outputs = {f[N-1].function()};
         FunctionDAG dag(outputs, params, target);
-        State optimal = optimal_schedule(dag, outputs, params, &throughput_predictor, 1);
+        State optimal = optimal_schedule(dag, outputs, params, &predictor, 1);
         debug(0) << "** Optimal schedule:\n";
-        optimal.calculate_cost(dag, params, &throughput_predictor, true);
+        optimal.calculate_cost(dag, params, &predictor, true);
         optimal.dump();
         debug(0) << '\n';
 
@@ -2482,10 +2477,10 @@ void autoschedule_test() {
 
         vector<Function> outputs = {f.function()};
         FunctionDAG dag(outputs, params, target);
-        State optimal = optimal_schedule(dag, outputs, params, &throughput_predictor, beam_size);
+        State optimal = optimal_schedule(dag, outputs, params, &predictor, beam_size);
 
         debug(0) << "** Optimal schedule:\n";
-        optimal.calculate_cost(dag, params, &throughput_predictor, true);
+        optimal.calculate_cost(dag, params, &predictor, true);
         optimal.dump();
         debug(0) << '\n';
     }
@@ -2508,10 +2503,10 @@ void autoschedule_test() {
 
         vector<Function> outputs = {downx.function()};
         FunctionDAG dag(outputs, params, target);
-        State optimal = optimal_schedule(dag, outputs, params, &throughput_predictor, 1);
+        State optimal = optimal_schedule(dag, outputs, params, &predictor, 1);
 
         debug(0) << "** Optimal schedule:\n";
-        optimal.calculate_cost(dag, params, &throughput_predictor, true);
+        optimal.calculate_cost(dag, params, &predictor, true);
         optimal.dump();
         debug(0) << '\n';
     }
@@ -2534,12 +2529,12 @@ void autoschedule_test() {
 
         vector<Function> outputs = {g.function()};
         FunctionDAG dag(outputs, params, target);
-        State optimal = optimal_schedule(dag, outputs, params, &throughput_predictor, 4);
+        State optimal = optimal_schedule(dag, outputs, params, &predictor, 4);
 
         dag.dump();
 
         debug(0) << "** Optimal schedule:\n";
-        optimal.calculate_cost(dag, params, &throughput_predictor, true);
+        optimal.calculate_cost(dag, params, &predictor, true);
         optimal.dump();
         debug(0) << '\n';
     }
@@ -2568,10 +2563,10 @@ void autoschedule_test() {
         vector<Function> outputs = {after[4].function()};
         FunctionDAG dag(outputs, params, target);
         dag.dump();
-        State optimal = optimal_schedule(dag, outputs, params, &throughput_predictor, 1);
+        State optimal = optimal_schedule(dag, outputs, params, &predictor, 1);
 
         debug(0) << "** Optimal schedule:\n";
-        optimal.calculate_cost(dag, params, &throughput_predictor, true);
+        optimal.calculate_cost(dag, params, &predictor, true);
         optimal.dump();
         debug(0) << '\n';
     }
