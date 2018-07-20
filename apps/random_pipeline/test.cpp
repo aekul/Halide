@@ -21,7 +21,7 @@ size_t peak;
 
 void *my_malloc(void *ucon, size_t sz) {
     counter++;
-    if (sz > peak) {peak = sz};
+    if (sz > peak) { peak = sz; };
 
     return halide_default_malloc(ucon, sz);
 }
