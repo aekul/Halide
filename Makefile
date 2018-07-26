@@ -179,6 +179,9 @@ CXX_FLAGS += $(PY_INCLUDES)
 # PY_LIBS = $(shell python3-config --ldflags) -fno-lto
 # COMMON_LD_FLAGS += $(PY_LIBS)
 
+# JSON and co
+CXX_FLAGS += -Ivendors/include
+
 # This is required on some hosts like powerpc64le-linux-gnu because we may build
 # everything with -fno-exceptions.  Without -funwind-tables, libHalide.so fails
 # to propagate exceptions and causes a test failure.
