@@ -24,18 +24,15 @@ build: $(BIN)/$(ID)/benchmark
 
 # Runtime, shared across random pipelines
 $(BIN)/runtime.a: $(BIN)/random_pipeline.generator
-	@echo Building runtime
 	@$^ -r runtime target=$(HL_TARGET) -o $(BIN)
 
 # Common generator
 $(BIN)/random_pipeline.generator: random_pipeline_generator.cpp $(GENERATOR_DEPS)
-	@echo Building generator
 	@mkdir -p $(@D)
 	@$(CXX) $(CXXFLAGS) -fno-rtti $(filter-out %.h,$^) \
 		-o $@ $(LDFLAGS) $(HALIDE_SYSTEM_LDFLAGS)
 
 $(BIN)/$(ID)/random_pipeline.a: $(BIN)/random_pipeline.generator
-	@echo "Generating random pipeline (autoschedule ? $(AUTO_SCHEDULE))"
 	@mkdir -p $(@D)
 	@HL_RANDOM_DROPOUT=$(HL_RANDOM_DROPOUT) \
 	HL_SEED=$(HL_SEED) \
@@ -48,14 +45,11 @@ $(BIN)/$(ID)/random_pipeline.a: $(BIN)/random_pipeline.generator
 		seed=$(PIPELINE_SEED) max_stages=$(PIPELINE_STAGES) \
 		2> $(BIN)/$(ID)/stderr.txt > $(BIN)/$(ID)/stdout.txt
 
-$(BIN)/$(ID)/benchmark: benchmark.cpp \
-	$(BIN)/$(ID)/random_pipeline.a $(BIN)/runtime.a
-	@echo Building benchmark
+$(BIN)/$(ID)/benchmark: benchmark.cpp $(BIN)/$(ID)/random_pipeline.a $(BIN)/runtime.a
 	@mkdir -p $(@D)
 	@$(CXX) $(CXXFLAGS) -I$(BIN)/$(ID) -I$(JSON) -Wall -O3 $^ -o $@ $(LDFLAGS)
 
 $(BIN)/$(ID)/timing.json: $(BIN)/$(ID)/benchmark
-	@echo $^ $@
 	@$^ $@ 2>&1 > /dev/null
 
 bench: $(BIN)/$(ID)/timing.json
