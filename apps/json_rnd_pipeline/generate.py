@@ -33,8 +33,8 @@ class GeneratorParams(object):
       "HL_TARGET": self.hl_target,
       "HL_SEED": str(self.hl_seed),
       "PIPELINE_SEED": str(self.pipeline_seed),
-      "STAGES": str(self.stages),
-      "HL_DROPOUT": str(self.dropout),
+      "PIPELINE_STAGES": str(self.stages),
+      "HL_RANDOM_DROPOUT": str(self.dropout),
       "HL_BEAM_SIZE": str(self.beam),
     }
 
@@ -165,11 +165,11 @@ if __name__ == "__main__":
 
   # Generation params
   parser.add_argument("--pipelines", type=int, default=1)
-  parser.add_argument("--schedules", type=int, default=2)
+  parser.add_argument("--schedules", type=int, default=10)
   parser.add_argument("--hl_target", type=str, default="host-new_autoscheduler")
   parser.add_argument("--dropout", type=int, default=50)
   parser.add_argument("--beam_size", type=int, default=1)
-  parser.add_argument("--timeout", type=float, default=10.0, help="in seconds")
+  parser.add_argument("--timeout", type=float, default=20.0, help="in seconds")
 
   parser.set_defaults(build_only=False)
   parser.set_defaults(bench_only=False)
