@@ -502,7 +502,9 @@ function(_halide_runtime_target_name HALIDE_TARGET OUTVAR)
         strict_float
         legacy_buffer_wrappers
         tsan
-      )
+        asan
+        new_autoscheduler
+    )
     # Synthesize a one-or-two-char abbreviation based on the feature's position
     # in the KNOWN_FEATURES list.
     set(I 0)

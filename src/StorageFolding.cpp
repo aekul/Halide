@@ -328,25 +328,33 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
 
         string dynamic_footprint;
 
+        Scope<Interval> bounds;
+        bounds.push(op->name, Interval(op->min, simplify(op->min + op->extent - 1)));
+
+        Scope<Interval> steady_bounds;
+        steady_bounds.push(op->name, Interval(simplify(op->min + 1), simplify(op->min + op->extent - 1)));
+
         // Try each dimension in turn from outermost in
         for (size_t i = box.size(); i > 0; i--) {
             int dim = (int)(i-1);
-            Expr min = simplify(box[dim].min);
-            Expr max = simplify(box[dim].max);
+            Expr min = simplify(common_subexpression_elimination(box[dim].min));
+            Expr max = simplify(common_subexpression_elimination(box[dim].max));
 
             // Consider the initial iteration and steady state
             // separately for all these proofs.
             Expr loop_var = Variable::make(Int(32), op->name);
             Expr steady_state = (op->min < loop_var);
 
-            Expr min_steady = simplify(substitute(steady_state, const_true(), min));
-            Expr max_steady = simplify(substitute(steady_state, const_true(), max));
-            Expr min_initial = simplify(substitute(steady_state, const_false(), min));
-            Expr max_initial = simplify(substitute(steady_state, const_false(), max));
-            Expr extent_initial = simplify(substitute(loop_var, op->min, max_initial - min_initial + 1));
-            Expr extent_steady = simplify(max_steady - min_steady + 1);
+            Expr min_steady = simplify(substitute(steady_state, const_true(), min), true, steady_bounds);
+            Expr max_steady = simplify(substitute(steady_state, const_true(), max), true, steady_bounds);
+            Expr min_initial = simplify(substitute(steady_state, const_false(), min), true, bounds);
+            Expr max_initial = simplify(substitute(steady_state, const_false(), max), true, bounds);
+            Expr min_second = simplify(substitute(op->name, op->min + 1, min_steady));
+            Expr max_second = simplify(substitute(op->name, op->min + 1, max_steady));
+            Expr extent_initial = simplify(substitute(loop_var, op->min, max_initial - min_initial + 1), true, bounds);
+            Expr extent_steady = simplify(max_steady - min_steady + 1, true, steady_bounds);
             Expr extent = Max::make(extent_initial, extent_steady);
-            extent = simplify(common_subexpression_elimination(extent));
+            extent = simplify(common_subexpression_elimination(extent), true, bounds);
 
             const StorageDim &storage_dim = func.schedule().storage_dims()[dim];
             Expr explicit_factor;
@@ -361,27 +369,36 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                 explicit_factor = storage_dim.fold_factor;
             }
 
-            debug(3) << "\nConsidering folding " << func.name() << " over for loop over " << op->name << '\n'
+            debug(3) << "\nConsidering folding " << func.name() << " over for loop over " << op->name << " along dimension " << dim << '\n'
                      << "Min: " << min << '\n'
                      << "Max: " << max << '\n'
+                     << "Min steady: " << min_steady << '\n'
+                     << "Max steady: " << max_steady << '\n'
+                     << "Min initial: " << min_initial << '\n'
+                     << "Max initial: " << max_initial << '\n'
+                     << "Min second: " << min_second << '\n'
+                     << "Max second: " << max_second << '\n'
+                     << "Min monotonic: " << simplify(common_subexpression_elimination(min_second >= min_initial), true, bounds) << '\n'
                      << "Extent: " << extent << '\n';
 
             // First, attempt to detect if the loop is monotonically
             // increasing or decreasing (if we allow automatic folding).
             bool min_monotonic_increasing =
                 (!explicit_only &&
-                 is_monotonic(min_steady, op->name) == Monotonic::Increasing &&
-                 can_prove(min_steady >= min_initial));
+                 (is_monotonic(min, op->name) == Monotonic::Increasing ||
+                  (is_monotonic(min_steady, op->name) == Monotonic::Increasing &&
+                   can_prove(min_second >= min_initial, bounds))));
 
             bool max_monotonic_decreasing =
                 (!explicit_only &&
-                 is_monotonic(max_steady, op->name) == Monotonic::Decreasing &&
-                 can_prove(max_steady <= max_initial));
+                 (is_monotonic(max, op->name) == Monotonic::Decreasing ||
+                  (is_monotonic(max_steady, op->name) == Monotonic::Decreasing &&
+                   can_prove(max_second <= max_initial, bounds))));
 
             if (explicit_factor.defined()) {
                 bool can_skip_dynamic_checks =
                     ((min_monotonic_increasing || max_monotonic_decreasing) &&
-                     can_prove(extent <= explicit_factor));
+                     can_prove(extent <= explicit_factor, bounds));
                 if (!can_skip_dynamic_checks) {
                     // If we didn't find a monotonic dimension, or
                     // couldn't prove the extent was small enough, and we
@@ -428,9 +445,20 @@ class AttemptStorageFoldingOfFunction : public IRMutator {
                     if (const_max_extent && *const_max_extent <= max_fold) {
                         factor = static_cast<int>(next_power_of_two(*const_max_extent));
                     } else {
-                        debug(3) << "Not folding because extent not bounded by a constant not greater than " << max_fold << "\n"
-                                 << "extent = " << extent << "\n"
-                                 << "max extent = " << max_extent << "\n";
+                        // Try a little harder to find a bounding power of two
+                        int e = max_fold * 2;
+                        bool success = false;
+                        while (e > 0 && can_prove(extent <= e / 2)) {
+                            success = true;
+                            e /= 2;
+                        }
+                        if (success) {
+                            factor = e;
+                        } else {
+                            debug(3) << "Not folding because extent not bounded by a constant not greater than " << max_fold << "\n"
+                                     << "extent = " << extent << "\n"
+                                     << "max extent = " << max_extent << "\n";
+                        }
                     }
                 }
 

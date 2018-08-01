@@ -321,6 +321,7 @@ TARGET=$(if $(HL_TARGET),$(HL_TARGET),host)
 # The following directories are all relative to the output directory (i.e. $(CURDIR), not $(SRC_DIR))
 LIB_DIR     = lib
 BIN_DIR     = bin
+WEIGHTS_DIR = weights
 DISTRIB_DIR = distrib
 INCLUDE_DIR = include
 DOC_DIR     = doc
@@ -345,6 +346,7 @@ SOURCE_FILES = \
   AssociativeOpsTable.cpp \
   Associativity.cpp \
   AutoSchedule.cpp \
+  AutoScheduleNew.cpp \
   AutoScheduleUtils.cpp \
   BoundaryConditions.cpp \
   Bounds.cpp \
@@ -446,6 +448,25 @@ SOURCE_FILES = \
   ScheduleFunctions.cpp \
   SelectGPUAPI.cpp \
   Simplify.cpp \
+  Simplify_Add.cpp \
+  Simplify_And.cpp \
+  Simplify_Call.cpp \
+  Simplify_Cast.cpp \
+  Simplify_Div.cpp \
+  Simplify_EQ.cpp \
+  Simplify_Exprs.cpp \
+  Simplify_LT.cpp \
+  Simplify_Let.cpp \
+  Simplify_Max.cpp \
+  Simplify_Min.cpp \
+  Simplify_Mod.cpp \
+  Simplify_Mul.cpp \
+  Simplify_Not.cpp \
+  Simplify_Or.cpp \
+  Simplify_Select.cpp \
+  Simplify_Shuffle.cpp \
+  Simplify_Stmts.cpp \
+  Simplify_Sub.cpp \
   SimplifySpecializations.cpp \
   SkipStages.cpp \
   SlidingWindow.cpp \
@@ -483,6 +504,7 @@ HEADER_FILES = \
   AssociativeOpsTable.h \
   Associativity.h \
   AutoSchedule.h \
+  AutoScheduleNew.h \
   AutoScheduleUtils.h \
   BoundaryConditions.h \
   Bounds.h \
@@ -743,6 +765,31 @@ INITIAL_MODULES = $(RUNTIME_CPP_COMPONENTS:%=$(BUILD_DIR)/initmod.%_32.o) \
                   $(RUNTIME_LL_COMPONENTS:%=$(BUILD_DIR)/initmod.%_ll.o) \
                   $(PTX_DEVICE_INITIAL_MODULES:libdevice.%.bc=$(BUILD_DIR)/initmod_ptx.%_ll.o)
 
+WEIGHTS_COMPONENTS = \
+  head1_conv1_bias \
+  head1_conv1_weight \
+  head2_conv1_bias \
+  head2_conv1_weight \
+  trunk_conv1_bias \
+  trunk_conv1_weight \
+  trunk_conv2_bias \
+  trunk_conv2_weight \
+  trunk_conv3_bias \
+  trunk_conv3_weight \
+  trunk_conv4_bias \
+  trunk_conv4_weight \
+  trunk_conv5_bias \
+  trunk_conv5_weight \
+  trunk_conv6_bias \
+  trunk_conv6_weight \
+  pipeline_mean \
+  pipeline_std \
+  schedule_mean \
+  schedule_std 
+
+WEIGHTS = $(WEIGHTS_COMPONENTS:%=$(BUILD_DIR)/weights_%.o)
+OBJECTS += $(WEIGHTS)
+
 # Add the Hexagon simulator to the rpath on Linux. (Not supported elsewhere, so no else cases.)
 ifeq ($(UNAME), Linux)
 ifneq (,$(WITH_HEXAGON))
@@ -868,6 +915,9 @@ $(BUILD_DIR)/initmod.inlined_c.cpp: $(BIN_DIR)/binary2cpp $(SRC_DIR)/runtime/buf
 $(BUILD_DIR)/initmod_ptx.%_ll.cpp: $(BIN_DIR)/binary2cpp $(SRC_DIR)/runtime/nvidia_libdevice_bitcode/libdevice.%.bc
 	./$(BIN_DIR)/binary2cpp halide_internal_initmod_ptx_$(basename $*)_ll < $(SRC_DIR)/runtime/nvidia_libdevice_bitcode/libdevice.$*.bc > $@
 
+$(BUILD_DIR)/weights_%.cpp: $(BIN_DIR)/binary2cpp $(WEIGHTS_DIR)/%.data
+	./$(BIN_DIR)/binary2cpp halide_internal_weights_$* < $(WEIGHTS_DIR)/$*.data > $@
+
 $(BIN_DIR)/binary2cpp: $(ROOT_DIR)/tools/binary2cpp.cpp
 	@mkdir -p $(@D)
 	$(CXX) $< -o $@
@@ -881,6 +931,10 @@ $(BUILD_DIR)/initmod.%.o: $(BUILD_DIR)/initmod.%.cpp
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp $(SRC_DIR)/%.h $(BUILD_DIR)/llvm_ok
 	@mkdir -p $(@D)
 	$(CXX) $(CXX_FLAGS) -c $< -o $@ -MMD -MP -MF $(BUILD_DIR)/$*.d -MT $(BUILD_DIR)/$*.o
+
+$(BUILD_DIR)/Simplify_%.o: $(SRC_DIR)/Simplify_%.cpp $(SRC_DIR)/Simplify_Internal.h $(BUILD_DIR)/llvm_ok
+	@mkdir -p $(@D)
+	$(CXX) $(CXX_FLAGS) -c $< -o $@ -MMD -MP -MF $(BUILD_DIR)/Simplify_$*.d -MT $@
 
 .PHONY: clean
 clean:
@@ -1581,6 +1635,7 @@ TEST_APPS=\
 	local_laplacian \
 	nl_means \
 	resize \
+	stencil_chain \
 	wavelet \
 
 .PHONY: test_apps

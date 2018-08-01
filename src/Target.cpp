@@ -268,6 +268,7 @@ const std::map<std::string, Target::Feature> feature_name_map = {
     {"legacy_buffer_wrappers", Target::LegacyBufferWrappers},
     {"tsan", Target::TSAN},
     {"asan", Target::ASAN},
+    {"new_autoscheduler", Target::NewAutoscheduler},
     // NOTE: When adding features to this map, be sure to update
     // PyEnums.cpp and halide.cmake as well.
 };

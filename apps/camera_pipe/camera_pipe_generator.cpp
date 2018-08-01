@@ -273,16 +273,8 @@ Func CameraPipe::color_correct(Func input) {
     Expr ig = cast<int32_t>(input(x, y, 1));
     Expr ib = cast<int32_t>(input(x, y, 2));
 
-    Expr r = matrix(3, 0) + matrix(0, 0) * ir + matrix(1, 0) * ig + matrix(2, 0) * ib;
-    Expr g = matrix(3, 1) + matrix(0, 1) * ir + matrix(1, 1) * ig + matrix(2, 1) * ib;
-    Expr b = matrix(3, 2) + matrix(0, 2) * ir + matrix(1, 2) * ig + matrix(2, 2) * ib;
-
-    r = cast<int16_t>(r/256);
-    g = cast<int16_t>(g/256);
-    b = cast<int16_t>(b/256);
-    corrected(x, y, c) = select(c == 0, r,
-                                c == 1, g,
-                                        b);
+    Expr e = matrix(3, c) + matrix(0, c) * ir + matrix(1, c) * ig + matrix(2, c) * ib;
+    corrected(x, y, c) = cast<int16_t>(e/256);
 
     return corrected;
 }
@@ -423,9 +415,15 @@ void CameraPipe::generate() {
 
         processed
             .estimate(c, 0, 3)
-            .estimate(x, 0, 2592)
-            .estimate(y, 0, 1968);
+            .estimate(x, 0, 2592 - 32)
+            .estimate(y, 0, 1968 - 48);
 
+
+        // We can generate slightly better code if we know the output is even-size
+        processed
+            .bound(c, 0, 3)
+            .bound(x, 0, ((processed.dim(0).extent())/2)*2)
+            .bound(y, 0, ((processed.dim(1).extent())/2)*2);
     } else {
 
         Expr out_width = processed.width();
