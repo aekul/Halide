@@ -2029,7 +2029,9 @@ struct PartialScheduleNode {
                             parent.exists = false;
                             parent.extent = 1;
                         } else {
-                            Var outer(parent.var.name() + "o"), inner(parent.var.name() + "i");
+                            VarOrRVar outer(parent.var.name() + "o", parent.var.is_rvar),
+                                      inner(parent.var.name() + "i", parent.var.is_rvar);
+                            // Var outer(parent.var.name() + "o"), inner(parent.var.name() + "i");
                             debug(0) << "Splitting " << parent.var.name() << " by " << factor << '\n';
                             if (parent.extent % factor == 0 && stage == 0) {
                                 // TODO: If the actual size doesn't match the estimates, this could make some bad assumptions.
