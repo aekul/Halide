@@ -2517,12 +2517,14 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
                                    const MachineParams &params) {
 
     State::cost_calculations = 0;
+
+    // Schedule seed
     string seed_str = get_env_variable("HL_SEED");
     int seed = (int)time(NULL);
     if (!seed_str.empty()) {
         seed = atoi(seed_str.c_str());
     }
-    debug(0) << "Dropout seed = " << seed << "\n";
+    debug(0) << "Schedule seed = " << seed << "\n";
     srand(seed);
 
     string beam_size_str = get_env_variable("HL_BEAM_SIZE");
@@ -2540,7 +2542,6 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
 
 
     FunctionDAG dag(outputs, params, target);
-
     // dag.dump();
 
     auto w = AutoScheduleModel::load_weights();
@@ -2593,7 +2594,7 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
     if (!json_path.empty()) {
         json jdata;
         jdata["features"] = jfeatures;
-        jdata["dropout_seed"] = seed;
+        jdata["schedule_seed"] = seed;
         jdata["beam_size"] = beam_size;
         jdata["autoschedule_timelimit"] = time_limit;
         jdata["dag"] = dag.json_dump();
@@ -2601,7 +2602,8 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
         jdata["optimal_schedule"]["cost_evaluations"] = State::cost_calculations;
         debug(0) << "Dumping json to " << json_path << "\n";
         std::ofstream json_file(json_path);
-        json_file << std::setw(2) << jdata << std::endl;
+        json_file << jdata << std::endl;
+        // json_file << std::setw(2) << jdata << std::endl;
     }
 
     return "";

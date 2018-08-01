@@ -2,16 +2,17 @@
 """Parametrized generation of random pipelines."""
 
 import argparse
+from copy import deepcopy
+import json
+from multiprocessing import Process, Queue, Pool, JoinableQueue
 import os
-import copy
+import re
 import subprocess
 import time
 
-from multiprocessing import Process, Queue, Pool, JoinableQueue
-
 
 class GeneratorParams(object):
-  """Parameters driving the generator"""
+  """Parameters driving the generator, passed as env-vars"""
   def __init__(self, hl_target, hl_seed, pipe_seed, stages,
                dropout, beam, timeout):
     self.hl_target = hl_target
@@ -38,71 +39,149 @@ class GeneratorParams(object):
     }
 
 def get_pipeline_env(params):
-  """Preserve user env, and add pipeline-relevant vars."""
-  env = copy.deepcopy(os.environ)
+  """Preserves user env, and add pipeline-relevant vars."""
+  env = deepcopy(os.environ)
   env.update(params.env())
   return env
 
 
 def build_one(q):
+  """Build one random pipeline."""
   while True:
     params = q.get(block=True, timeout=None)
     env = get_pipeline_env(params)
 
-    start = time.time()
-    subprocess.check_output(["make", "build"], env=env, timeout=params.timeout)
-    elapsed = time.time() - start
+    try:
+      start = time.time()
+      subprocess.check_output(["make", "build"], env=env, timeout=params.timeout)
+      elapsed = time.time() - start
+      print("pid {} {}, compiled in {:.2f}s".format(os.getpid(), params, elapsed))
+    except subprocess.TimeoutExpired:
+      print("pid {} {}, timed out over {:.2f}s".format(os.getpid(), params, params.timeout))
 
     q.task_done()
 
-    print("pid {} {}, compiled in {}s".format(os.getpid(), params, elapsed))
 
 
 def main(args):
   print("Building shared binaries")
-  subprocess.run(["make", "build_shared"])
+  subprocess.check_output(["make", "build_shared"])
 
   #TODO(mgharbi): add metadata about the pipe gen
+
   q = JoinableQueue()
-  pool = Pool(1, build_one, (q, ))
+  pool = Pool(args.workers, build_one, (q, ))
 
-  # Distributed build
-  print("\nBuilding pipelines")
-  for b in range(args.batches):
-    for p in range(args.pipelines):
-      stages = (p % 30) + 10  # number of stages for that pipeline
-      for s in ["root"] + list(range(args.schedules)):
-        params = GeneratorParams(
-          args.hl_target, s, p, stages, args.dropout,
-          args.beam_size, args.timeout)
-        q.put(params, block=True)
-  q.join()
+  if not args.gather_only:
+    for b in range(args.batches):
+      # Distributed build
+      if not args.bench_only:
+        print("\nBuilding pipelines")
+        for p in range(args.pipelines):
+          p = b*args.pipelines + p
+          stages = (p % 30) + 10  # number of stages for that pipeline
+          for s in ["root"] + list(range(args.schedules)):
+            params = GeneratorParams(
+              args.hl_target, s, p, stages, args.dropout,
+              args.beam_size, args.timeout)
+            q.put(params, block=True)
+        q.join()
 
-  # Sequential benchmarking
-  print("\nBenchmarking pipelines")
-  for b in range(args.batches):
-    for p in range(args.pipelines):
-      stages = (p % 30) + 10  # number of stages for that pipeline
-      for s in ["root"] + list(range(args.schedules)):
-        params = GeneratorParams(
-          args.hl_target, s, p, stages, args.dropout,
-          args.beam_size, args.timeout)
-        env = get_pipeline_env(params)
-        env["HL_NUM_THREASD"] = str(os.cpu_count())
-        subprocess.run(["make", "bench"], env=env, timeout=params.timeout)  # numactl --cpunodebind=0 make bench
+      if args.build_only:
+        continue
+
+      # Sequential benchmarking
+      print("\nBenchmarking pipelines")
+      for p in range(args.pipelines):
+        p = b*args.pipelines + p
+        stages = (p % 30) + 10  # number of stages for that pipeline
+        for s in ["root"] + list(range(args.schedules)):
+          params = GeneratorParams(
+            args.hl_target, s, p, stages, args.dropout,
+            args.beam_size, args.timeout)
+          env = get_pipeline_env(params)
+          env["HL_NUM_THREASD"] = str(os.cpu_count())
+          start = time.time()
+          try:
+            start = time.time()
+            subprocess.check_output(["make", "bench"], env=env, timeout=params.timeout)
+            # numactl --cpunodebind=0 make bench
+            elapsed = time.time() - start
+            print("Benchmarking {} took {:.2f}s".format(params, elapsed))
+          except subprocess.TimeoutExpired:
+            print("Benchmarking {} timed out at {:.2f}s".format(params, params.timeout))
+
+    if args.build_only:
+      return
 
   # Gather dataset
+  print("\nGathering dataset")
+  src = os.path.join(args.bin_dir, args.hl_target)
+  os.makedirs(args.results_dir, exist_ok=True)
+  path_re = re.compile(r".*pipe(?P<pipe>\d+)")
+  seed_re = re.compile("(.*?_seed)(?P<seed>[^_]*)(_.*?)")
+  for r, dd, ff in os.walk(src):
+    for f in ff:
+      if f == "features.json":
+        start = time.time()
+        # extract pipe seed 
+        match = path_re.match(r)
+        pipe_seed = int(match.group("pipe"))
+
+        root_path = re.sub(seed_re, "\g<1>root\g<3>", r)
+
+        try:
+          feats = os.path.join(r, f)
+          with open(feats, 'r') as fid:
+            features = json.load(fid)
+          times = feats.replace("features", "timing")
+          with open(times, 'r') as fid:
+            timing = json.load(fid)
+          times_root = os.path.join(root_path, "timing.json")
+          with open(times_root, 'r') as fid:
+            timing_root = json.load(fid)
+
+          features["pipeline_seed"] = pipe_seed
+          features["time"] = timing["time"]
+          features["time_root"] = timing_root["time"]
+
+          elapsed = time.time() - start
+          print(r, elapsed, pipe_seed, features["schedule_seed"], features["time"], features["time_root"])
+        except:
+          print(r, "failed")
+
+        fname = "pipeline_{:03d}_schedule_{:03d}.json".format(pipe_seed, features["schedule_seed"])
+        with open(os.path.join(args.results_dir, fname), 'w') as fid:
+          json.dump(features, fid)
 
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
   parser.add_argument("--workers", type=int, default=4)
+  parser.add_argument("--results_dir", type=str, default="generated")
+  parser.add_argument("--bin_dir", type=str, default="bin")
+
+  parser.add_argument("--build_only", dest="build_only", action="store_true", help="do not benchmark the pipelines")
+  parser.add_argument("--bench_only", dest="bench_only", action="store_true", help="do not generate new pipelines, just consolidate the dataset")
+  parser.add_argument("--gather_only", dest="gather_only", action="store_true", help="do not generate new pipelines, just consolidate the dataset")
+
+  # Generation params
   parser.add_argument("--batches", type=int, default=1)
-  parser.add_argument("--pipelines", type=int, default=1)
-  parser.add_argument("--schedules", type=int, default=2)
+  parser.add_argument("--pipelines", type=int, default=1000)
+  parser.add_argument("--schedules", type=int, default=20)
   parser.add_argument("--hl_target", type=str, default="host-new_autoscheduler")
   parser.add_argument("--dropout", type=int, default=50)
-  parser.add_argument("--beam_size", type=int, default=2)
+  parser.add_argument("--beam_size", type=int, default=10)
   parser.add_argument("--timeout", type=float, default=10.0, help="in seconds")
+
+  parser.set_defaults(build_only=False)
+  parser.set_defaults(bench_only=False)
+  parser.set_defaults(gather_only=False)
+
   args = parser.parse_args()
+
+  # if args.build_only or args.bench_only or args.gather_only:
+  #   assert args.build_only != args.bench_only, "choose either bench- or build-only"
+  #   assert args.build_only != args.gather_only, "choose either gather- or build-only"
+
   main(args)

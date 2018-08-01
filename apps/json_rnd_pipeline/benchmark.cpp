@@ -60,7 +60,7 @@ int main(int argc, char *argv[])
     jdata["time"] = best;
 
     std::ofstream json_file(json_path);
-    json_file << std::setw(2) << jdata << std::endl;
+    json_file << jdata << std::endl;
     json_file.close();
 
     return 0;
