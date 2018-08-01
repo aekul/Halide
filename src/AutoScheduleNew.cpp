@@ -21,6 +21,12 @@
 #include <chrono>
 #include <iostream>
 #include <random>
+#include <sstream>
+
+
+#include <json.hpp>
+
+using json = nlohmann::json;
 
 // TODO: overview of algorithm
 
@@ -37,6 +43,12 @@ using std::map;
 using std::set;
 using std::pair;
 
+
+std::string expr2str(Expr e) {
+  std::stringstream s;
+  s << e;
+  return s.str();
+}
 // This should be a function f s.t
 // f(0) = 0
 // f(params.last_level_cache_size) = params.balance
