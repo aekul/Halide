@@ -73,43 +73,40 @@ def main(args):
   pool = Pool(args.workers, build_one, (q, ))
 
   if not args.gather_only:
-    for b in range(args.batches):
-      # Distributed build
-      if not args.bench_only:
-        print("\nBuilding pipelines")
-        for p in range(args.pipelines):
-          p = b*args.pipelines + p
-          stages = (p % 30) + 10  # number of stages for that pipeline
-          for s in ["root"] + list(range(args.schedules)):
-            params = GeneratorParams(
-              args.hl_target, s, p, stages, args.dropout,
-              args.beam_size, args.timeout)
-            q.put(params, block=True)
-        q.join()
-
-      if args.build_only:
-        continue
-
-      # Sequential benchmarking
-      print("\nBenchmarking pipelines")
+    # Distributed build
+    if not args.bench_only:
+      print("\nBuilding pipelines")
       for p in range(args.pipelines):
-        p = b*args.pipelines + p
         stages = (p % 30) + 10  # number of stages for that pipeline
         for s in ["root"] + list(range(args.schedules)):
           params = GeneratorParams(
             args.hl_target, s, p, stages, args.dropout,
             args.beam_size, args.timeout)
-          env = get_pipeline_env(params)
-          env["HL_NUM_THREASD"] = str(os.cpu_count())
+          q.put(params, block=True)
+      q.join()
+
+      if args.build_only:
+        return
+
+    # Sequential benchmarking
+    print("\nBenchmarking pipelines")
+    for p in range(args.pipelines):
+      stages = (p % 30) + 10  # number of stages for that pipeline
+      for s in ["root"] + list(range(args.schedules)):
+        params = GeneratorParams(
+          args.hl_target, s, p, stages, args.dropout,
+          args.beam_size, args.timeout)
+        env = get_pipeline_env(params)
+        env["HL_NUM_THREASD"] = str(os.cpu_count())
+        start = time.time()
+        try:
           start = time.time()
-          try:
-            start = time.time()
-            subprocess.check_output(["make", "bench"], env=env, timeout=params.timeout)
-            # numactl --cpunodebind=0 make bench
-            elapsed = time.time() - start
-            print("Benchmarking {} took {:.2f}s".format(params, elapsed))
-          except subprocess.TimeoutExpired:
-            print("Benchmarking {} timed out at {:.2f}s".format(params, params.timeout))
+          subprocess.check_output(["make", "bench"], env=env, timeout=params.timeout)
+          # numactl --cpunodebind=0 make bench
+          elapsed = time.time() - start
+          print("Benchmarking {} took {:.2f}s".format(params, elapsed))
+        except subprocess.TimeoutExpired:
+          print("Benchmarking {} timed out at {:.2f}s".format(params, params.timeout))
 
     if args.build_only:
       return
@@ -147,12 +144,13 @@ def main(args):
 
           elapsed = time.time() - start
           print(r, elapsed, pipe_seed, features["schedule_seed"], features["time"], features["time_root"])
+
+          fname = "pipeline_{:03d}_schedule_{:03d}.json".format(pipe_seed, features["schedule_seed"])
+          with open(os.path.join(args.results_dir, fname), 'w') as fid:
+            json.dump(features, fid)
         except:
           print(r, "failed")
 
-        fname = "pipeline_{:03d}_schedule_{:03d}.json".format(pipe_seed, features["schedule_seed"])
-        with open(os.path.join(args.results_dir, fname), 'w') as fid:
-          json.dump(features, fid)
 
 
 if __name__ == "__main__":
@@ -166,12 +164,11 @@ if __name__ == "__main__":
   parser.add_argument("--gather_only", dest="gather_only", action="store_true", help="do not generate new pipelines, just consolidate the dataset")
 
   # Generation params
-  parser.add_argument("--batches", type=int, default=1)
-  parser.add_argument("--pipelines", type=int, default=1000)
-  parser.add_argument("--schedules", type=int, default=20)
+  parser.add_argument("--pipelines", type=int, default=1)
+  parser.add_argument("--schedules", type=int, default=2)
   parser.add_argument("--hl_target", type=str, default="host-new_autoscheduler")
   parser.add_argument("--dropout", type=int, default=50)
-  parser.add_argument("--beam_size", type=int, default=10)
+  parser.add_argument("--beam_size", type=int, default=1)
   parser.add_argument("--timeout", type=float, default=10.0, help="in seconds")
 
   parser.set_defaults(build_only=False)
