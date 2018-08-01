@@ -189,6 +189,94 @@ struct PipelineFeatures {
         }
     }
 
+    json json_dump() const {
+        json jdata;
+        const char *type_names[] = {"Bool", "UInt8", "UInt16", "UInt32", "UInt64", "Float", "Double"};
+        for (int i = 0; i < (int)ScalarType::NumScalarTypes; i++) {
+
+            json jtype;
+
+            // Histogram of ops
+            json jhistogram;
+            jhistogram["constant"] = op_histogram[(int)OpType::Const][i];
+            jhistogram["cast"] = op_histogram[(int)OpType::Cast][i];
+            jhistogram["variable"] = op_histogram[(int)OpType::Variable][i];
+            jhistogram["param"] = op_histogram[(int)OpType::Param][i];
+            jhistogram["add"] = op_histogram[(int)OpType::Add][i];
+            jhistogram["sub"] = op_histogram[(int)OpType::Sub][i];
+            jhistogram["mod"] = op_histogram[(int)OpType::Mod][i];
+            jhistogram["mul"] = op_histogram[(int)OpType::Mul][i];
+            jhistogram["div"] = op_histogram[(int)OpType::Div][i];
+            jhistogram["min"] = op_histogram[(int)OpType::Min][i];
+            jhistogram["max"] = op_histogram[(int)OpType::Max][i];
+            jhistogram["eq"] = op_histogram[(int)OpType::EQ][i];
+            jhistogram["ne"] = op_histogram[(int)OpType::NE][i];
+            jhistogram["lt"] = op_histogram[(int)OpType::LT][i];
+            jhistogram["le"] = op_histogram[(int)OpType::LE][i];
+            jhistogram["and"] = op_histogram[(int)OpType::And][i];
+            jhistogram["or"] = op_histogram[(int)OpType::Or][i];
+            jhistogram["not"] = op_histogram[(int)OpType::Not][i];
+            jhistogram["select"] = op_histogram[(int)OpType::Select][i];
+            jhistogram["image_call"] = op_histogram[(int)OpType::ImageCall][i];
+            jhistogram["func_call"] = op_histogram[(int)OpType::FuncCall][i];
+            jhistogram["self_call"] = op_histogram[(int)OpType::SelfCall][i];
+            jhistogram["extern_call"] = op_histogram[(int)OpType::ExternCall][i];
+            jhistogram["let"] = op_histogram[(int)OpType::Let][i];
+            jtype["op_histogram"] = jhistogram;
+
+            // Memory access patterns. Columns are 
+            //  - calls to other Funcs,
+            //  - self-calls
+            //  - input image access
+            //  - and stores
+            json jmemory;
+            jmemory["pointwise"] = { 
+              pointwise_accesses[0][i],
+              pointwise_accesses[1][i],
+              pointwise_accesses[2][i],
+              pointwise_accesses[3][i] };
+            jmemory["transpose"] = { 
+              transpose_accesses[0][i],
+              transpose_accesses[1][i],
+              transpose_accesses[2][i],
+              transpose_accesses[3][i] };
+            jmemory["broadcast"] = { 
+              broadcast_accesses[0][i],
+              broadcast_accesses[1][i],
+              broadcast_accesses[2][i],
+              broadcast_accesses[3][i] };
+            jmemory["slice"] = { 
+              slice_accesses[0][i],
+              slice_accesses[1][i],
+              slice_accesses[2][i],
+              slice_accesses[3][i] };
+            jmemory["vectorizable"] = { 
+              vectorizable_accesses[0][i],
+              vectorizable_accesses[1][i],
+              vectorizable_accesses[2][i],
+              vectorizable_accesses[3][i] };
+            jmemory["strided"] = { 
+              strided_accesses[0][i],
+              strided_accesses[1][i],
+              strided_accesses[2][i],
+              strided_accesses[3][i] };
+            jmemory["scalar"] = { 
+              scalar_accesses[0][i],
+              scalar_accesses[1][i],
+              scalar_accesses[2][i],
+              scalar_accesses[3][i] };
+            jmemory["gather_scatter"] = { 
+              gather_scatter_accesses[0][i],
+              gather_scatter_accesses[1][i],
+              gather_scatter_accesses[2][i],
+              gather_scatter_accesses[3][i] };
+            jtype["memory_access_patterns"] = jmemory;
+
+            jdata[type_names[i]] = jtype;
+        } // Loop over types
+
+        return jdata;
+    }
 };
 
 
@@ -244,6 +332,23 @@ struct FunctionDAG {
             Halide::Stage stage;
 
             Stage(Halide::Stage s) : stage(s) {}
+            json json_dump() const {
+                json jstage;
+                jstage["arithmetic_cost"] = compute;
+
+                vector<json> jvars;
+                for (const auto &l : loop) {
+                    json jv;
+                    jv["name"] = l.var;
+                    jv["min"] = expr2str(l.min);
+                    jv["max"] = expr2str(l.max);
+                    jvars.push_back(jv);
+                }
+                jstage["variables"] = jvars;
+
+                // jstage["features"] = features.json_dump();
+                return jstage;
+            }
         };
         vector<Stage> stages;
 
@@ -251,6 +356,37 @@ struct FunctionDAG {
         int vector_size;
 
         vector<const Edge *> outgoing_edges, incoming_edges;
+
+        json json_dump() const {
+            json node_data;
+            node_data["name"] = func.name();
+            node_data["inlined_cost"] = compute_if_inlined;
+            std::vector<json> jregion;
+            for (const Interval &i : region_required) {
+                json jinterval;
+                jinterval["min"] = expr2str(i.min);
+                jinterval["max"] = expr2str(i.max);
+                jregion.push_back(jinterval);
+            }
+            node_data["symbolic_region_required"] = jregion;
+            
+            std::vector<json> jregion_comp;
+            for (const Interval &i : region_computed) {
+                json jinterval;
+                jinterval["min"] = expr2str(i.min);
+                jinterval["max"] = expr2str(i.max);
+                jregion_comp.push_back(jinterval);
+            }
+            node_data["region_computed"] = jregion_comp;
+
+            std::vector<json> jstages;
+            for (size_t i = 0; i < stages.size(); i++) {
+                json jstage = stages[i].json_dump();
+                jstages.push_back(jstage);
+            }
+            node_data["stages"] = jstages;
+            return node_data;
+        }
     };
 
     struct Edge {
@@ -264,6 +400,23 @@ struct FunctionDAG {
         // The number of calls the consumer makes to the producer, per
         // point in the loop nest of the consumer.
         int calls;
+
+        json json_dump() const {
+          json jedge;
+          jedge["producer"] = producer->func.name();
+          jedge["consumer"] = consumer->func.name();
+          jedge["consumer_stage"] = consumer_stage;
+          jedge["calls"] = calls;
+          std::vector<json> jfootprint;
+          for (const Interval &i : bounds) {
+              json jinterval;
+              jinterval["min"] = expr2str(i.min);
+              jinterval["max"] = expr2str(i.max);
+              jfootprint.push_back(jinterval);
+          }
+          jedge["footprint"] = jfootprint;
+          return jedge;
+        }
     };
 
     vector<Node> nodes;
@@ -888,6 +1041,31 @@ struct FunctionDAG {
         }
     }
 
+    json json_dump() {
+        json jdata;
+        std::vector<json> jnodes;
+        std::map<std::string, int> node2idx;
+        int idx = 0;
+        for (const Node &n : nodes) {
+            json node_data = n.json_dump();
+            node2idx[n.func.name()] = idx;
+            node_data["id"] = idx;
+            idx += 1;
+            jnodes.push_back(node_data);
+        }
+        jdata["nodes"] = jnodes;
+
+        std::vector<json> jedges;
+        for (const Edge &e : edges) {
+          json jedge = e.json_dump();
+          jedge["producer_id"] = node2idx[e.producer->func.name()];
+          jedge["consumer_id"] = node2idx[e.consumer->func.name()];
+          jedges.push_back(jedge);
+        }
+        jdata["edges"] = jedges;
+        return jdata;
+    }
+
 private:
     // The auxiliary data structures use internal pointers, so we'll hide the copy constructor
     FunctionDAG(const FunctionDAG &other) = delete;
@@ -994,6 +1172,50 @@ struct ScheduleFeatures {
                  << "    innermost_bytes_at_root:         " << innermost_bytes_at_root << '\n'
                  << "    bytes_read_per_tile:             " << bytes_read_per_tile << '\n'
                  << "    inlined_calls:                   " << inlined_calls << '\n';
+    }
+    json json_dump(bool as_vector=true) const {
+        json jdata;
+        if (as_vector) {
+            jdata["features"] = {
+              num_realizations,
+              num_productions,
+              points_computed_per_realization,
+              points_computed_per_production,
+              points_computed_total,
+              points_computed_minimum,
+              innermost_loop_extent,
+              innermost_pure_loop_extent,
+              inner_parallelism,
+              outer_parallelism,
+              bytes_at_realization,
+              bytes_at_production,
+              bytes_at_root,
+              innermost_bytes_at_realization,
+              innermost_bytes_at_production,
+              innermost_bytes_at_root,
+              bytes_read_per_tile,
+              inlined_calls };
+        } else {
+            jdata["num_realizations"]                = num_realizations;
+            jdata["num_productions"]                 = num_productions;
+            jdata["points_computed_per_realization"] = points_computed_per_realization;
+            jdata["points_computed_per_production"]  = points_computed_per_production;
+            jdata["points_computed_total"]           = points_computed_total;
+            jdata["points_computed_minimum"]         = points_computed_minimum;
+            jdata["innermost_loop_extent"]           = innermost_loop_extent;
+            jdata["innermost_pure_loop_extent"]      = innermost_pure_loop_extent;
+            jdata["inner_parallelism"]               = inner_parallelism;
+            jdata["outer_parallelism"]               = outer_parallelism;
+            jdata["bytes_at_realization"]            = bytes_at_realization;
+            jdata["bytes_at_production"]             = bytes_at_production;
+            jdata["bytes_at_root"]                   = bytes_at_root;
+            jdata["innermost_bytes_at_realization"]  = innermost_bytes_at_realization;
+            jdata["innermost_bytes_at_production"]   = innermost_bytes_at_production;
+            jdata["innermost_bytes_at_root"]         = innermost_bytes_at_root;
+            jdata["bytes_read_per_tile"]             = bytes_read_per_tile;
+            jdata["inlined_calls"]                   = inlined_calls ;
+        }
+        return jdata;
     }
 };
 
@@ -1863,7 +2085,9 @@ struct State {
         return h;
     }
 
-    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params, ThroughputPredictorPipeline *throughput_predictor,  bool verbose = false) {
+    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params,
+        ThroughputPredictorPipeline *throughput_predictor,
+        bool verbose = false, std::vector<json> *jdata = nullptr) {
         map<const FunctionDAG::Node *, const PartialScheduleNode *> compute_site;
         map<const FunctionDAG::Node *, vector<ScheduleFeatures>> features;
         root.compute_features(params, compute_site, 1, 1, nullptr, root, &features);
@@ -1880,6 +2104,8 @@ struct State {
                     debug(0) << "YYY ";
                     debug(0) << n.func.name() << ' ' << (stage_idx - 1) << ' ';
                     const int64_t *sched_stats = (const int64_t *)(&sched_feat[stage_idx - 1]);
+
+                    // Dump schedule features
                     for (size_t i = 0; i < sizeof(ScheduleFeatures) / sizeof(int64_t); i++) {
                         // The schedule-based features are all
                         // naturally multiplicative and have a very
@@ -1887,11 +2113,26 @@ struct State {
                         // logged
                         debug(0) << std::log(1 + sched_stats[i]) << ' ';
                     }
+                    
+                    // Dump pipeline features
                     const int *stats = (const int *)(&s.features);
                     for (size_t i = 0; i < sizeof(s.features) / sizeof(int); i++) {
                         debug(0) << stats[i] << ' ';
                     }
                     debug(0) << '\n';
+
+                    if (jdata) {
+                      json jstage;
+                      jstage["name"] = n.func.name();
+                      jstage["stage_idx"] = stage_idx - 1;
+                      jstage["schedule"] = std::vector<int64_t>(
+                          sched_stats, 
+                          sched_stats+sizeof(ScheduleFeatures) / sizeof(int64_t));
+                      jstage["pipeline"] = std::vector<int>(
+                          stats, 
+                          stats+sizeof(s.features) / sizeof(int));
+                      jdata->push_back(jstage);
+                    }
                 }
             }
         }
@@ -2158,6 +2399,14 @@ struct State {
         root.dump("");
     }
 
+    json json_dump() const {
+        json jdata;
+        jdata["cost"] = cost;
+        // TODO(mgharbi): save schedule representation
+        // root.dump("");
+        return jdata;
+    }
+
     void apply_schedule(const MachineParams &params) {
         map<const FunctionDAG::Node::Stage *, PartialScheduleNode::FuncVars> vars_map;
         root.apply(LoopLevel::root(), vars_map, params.parallelism, nullptr);
@@ -2205,7 +2454,7 @@ struct State {
             }
         }
     }
-};
+}; // State
 
 int State::cost_calculations = 0;
 
@@ -2302,12 +2551,14 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
                                    const MachineParams &params) {
 
     State::cost_calculations = 0;
+
+    // Schedule seed
     string seed_str = get_env_variable("HL_SEED");
     int seed = (int)time(NULL);
     if (!seed_str.empty()) {
         seed = atoi(seed_str.c_str());
     }
-    debug(0) << "Dropout seed = " << seed << '\n';
+    debug(0) << "Schedule seed = " << seed << "\n";
     srand(seed);
 
     string beam_size_str = get_env_variable("HL_BEAM_SIZE");
@@ -2357,15 +2608,37 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
 
     debug(0) << "Cost evaluated this many times: " << State::cost_calculations << '\n';
 
+
+    string json_path = get_env_variable("HL_JSON_DUMP");
+    std::vector<json> jfeatures;
+
     // Just to get the debugging prints to fire
-    optimal.calculate_cost(dag, params, &throughput_predictor, true);
+    if(json_path.empty()) {  // do not store json dump
+      optimal.calculate_cost(dag, params, &throughput_predictor, true, nullptr);
+    } else {
+      optimal.calculate_cost(dag, params, &throughput_predictor, true, &jfeatures);
+    }
 
     // Apply the schedules
     optimal.apply_schedule(params);
-
+    
     // Print out the predicted runtime of each Func, so we can compare them to a profile
     // optimal.print_predicted_runtimes(params);
 
+    if (!json_path.empty()) {
+        json jdata;
+        jdata["features"] = jfeatures;
+        jdata["schedule_seed"] = seed;
+        jdata["beam_size"] = beam_size;
+        jdata["autoschedule_timelimit"] = time_limit;
+        jdata["dag"] = dag.json_dump();
+        jdata["optimal_schedule"] = optimal.json_dump();
+        jdata["optimal_schedule"]["cost_evaluations"] = State::cost_calculations;
+        debug(0) << "Dumping json to " << json_path << "\n";
+        std::ofstream json_file(json_path);
+        json_file << jdata << std::endl;
+        // json_file << std::setw(2) << jdata << std::endl;
+    }
 
     return "";
 }
