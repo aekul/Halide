@@ -105,6 +105,8 @@ def main(args):
           # numactl --cpunodebind=0 make bench
           elapsed = time.time() - start
           print("Benchmarking {} took {:.2f}s".format(params, elapsed))
+        except subprocess.CalledProcessError as e:
+          print("Benchmarking {} errored: {}s".format(params, e))
         except subprocess.TimeoutExpired:
           print("Benchmarking {} timed out at {:.2f}s".format(params, params.timeout))
 
@@ -164,8 +166,8 @@ if __name__ == "__main__":
   parser.add_argument("--gather_only", dest="gather_only", action="store_true", help="do not generate new pipelines, just consolidate the dataset")
 
   # Generation params
-  parser.add_argument("--pipelines", type=int, default=1)
-  parser.add_argument("--schedules", type=int, default=10)
+  parser.add_argument("--pipelines", type=int, default=10000)
+  parser.add_argument("--schedules", type=int, default=20)
   parser.add_argument("--hl_target", type=str, default="host-new_autoscheduler")
   parser.add_argument("--dropout", type=int, default=50)
   parser.add_argument("--beam_size", type=int, default=1)
@@ -176,9 +178,5 @@ if __name__ == "__main__":
   parser.set_defaults(gather_only=False)
 
   args = parser.parse_args()
-
-  # if args.build_only or args.bench_only or args.gather_only:
-  #   assert args.build_only != args.bench_only, "choose either bench- or build-only"
-  #   assert args.build_only != args.gather_only, "choose either gather- or build-only"
 
   main(args)
