@@ -220,10 +220,10 @@ public:
         schedule_features.set(Buffer<float>(*schedule_feats.raw_buffer()));
     }
 
-
     Buffer<float> pipeline_feat_queue, schedule_feat_queue;
     std::vector<double *> cost_queue;
     int cursor;
+
     int enqueue(int padded_stages, Buffer<float> *pipeline_feats, Buffer<float> *schedule_feats, double *cost) {
         const int batch_size = 1024;
         if (!pipeline_feat_queue.defined() || pipeline_feat_queue.dim(3).extent() != padded_stages) {
