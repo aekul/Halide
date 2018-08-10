@@ -2089,7 +2089,9 @@ struct State {
 
     bool calculate_cost(const FunctionDAG &dag, const MachineParams &params,
         ThroughputPredictor* throughput_predictor,
-        bool verbose = false, std::vector<json> *jdata = nullptr) {
+        bool verbose = false, 
+        json *json_dump = nullptr) {
+        std::vector<json> jdata;
         map<const FunctionDAG::Node *, const PartialScheduleNode *> compute_site;
         map<const FunctionDAG::Node *, vector<ScheduleFeatures>> features;
         root.compute_features(params, compute_site, 1, 1, nullptr, root, &features);
@@ -2122,20 +2124,18 @@ struct State {
                 // }
                 // debug(0) << '\n';
 
-                if (jdata) {
-                    json jstage;
-                    jstage["name"] = n.func.name();
-                    jstage["stage_idx"] = stage_idx - 1;
-                    // Dump schedule features
-                    jstage["schedule"] = std::vector<int64_t>(
-                        sched_stats, 
-                        sched_stats+sizeof(ScheduleFeatures) / sizeof(int64_t));
-                    // Dump pipeline features
-                    jstage["pipeline"] = std::vector<int>(
-                        stats, 
-                        stats+sizeof(s.features) / sizeof(int));
-                    jdata->push_back(jstage);
-                }
+                  json jstage;
+                  jstage["name"] = n.func.name();
+                  jstage["stage_idx"] = stage_idx - 1;
+                  // Dump schedule features
+                  jstage["schedule"] = std::vector<int64_t>(
+                      sched_stats, 
+                      sched_stats+sizeof(ScheduleFeatures) / sizeof(int64_t));
+                  // Dump pipeline features
+                  jstage["pipeline"] = std::vector<int>(
+                      stats, 
+                      stats+sizeof(s.features) / sizeof(int));
+                  jdata.push_back(jstage);
             }
         }
 
@@ -2144,9 +2144,7 @@ struct State {
         // Use external throughput predictor
         if (throughput_predictor) {
             // Won't actually run anything until we call evaluate_costs...
-            json nothing;
-            nothing["data"] = "something";
-            throughput_predictor->enqueue(nothing, &cost);
+            throughput_predictor->enqueue(jdata, &cost);
         }
 
         // C++ convnet version
@@ -2349,6 +2347,9 @@ struct State {
         //     }
         //     cost *= 1e-20;
         // }
+        if (json_dump) {
+          (*json_dump)["features"] = jdata;
+        }
 
         cost_calculations++;
         return true;
@@ -2591,7 +2592,7 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
 
     FunctionDAG dag(outputs, params, target);
 
-    dag.dump();
+    // dag.dump();
 
     // TODO(mgharbi): adds selector convnet vs. python RPC vs. built-in
     // Convnet throughput predictor
@@ -2601,6 +2602,12 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
     ThroughputPredictor throughput_predictor;
 
     State optimal;
+
+    json jdata;
+    jdata["dag"] = dag.json_dump();
+    jdata["schedule_seed"] = seed;
+
+    throughput_predictor.send_dag(jdata);
 
     if (time_limit) {
         // Use a fixed running time
@@ -2629,13 +2636,13 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
     std::cout << "Cost evaluated this many times: " << State::cost_calculations << '\n';
 
     string json_path = get_env_variable("HL_JSON_DUMP");
-    std::vector<json> jfeatures;
+    // std::vector<json> jfeatures;
 
-    // Just to get the debugging prints to fire
+    // Just to dump the json features
     if(json_path.empty()) {  // do not store json dump
-      optimal.calculate_cost(dag, params, &throughput_predictor, true, nullptr);
+      // optimal.calculate_cost(dag, params, &throughput_predictor, true, nullptr);
     } else {
-      optimal.calculate_cost(dag, params, &throughput_predictor, true, &jfeatures);
+      optimal.calculate_cost(dag, params, &throughput_predictor, true, &jdata);
     }
 
     // Apply the schedules
@@ -2645,15 +2652,12 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
     // optimal.print_predicted_runtimes(params);
 
     if (!json_path.empty()) {
-        json jdata;
-        jdata["dag"] = dag.json_dump();
-        jdata["features"] = jfeatures;
-        jdata["schedule_seed"] = seed;
+        // jdata["features"] = jfeatures;
         jdata["beam_size"] = beam_size;
         jdata["autoschedule_timelimit"] = time_limit;
         jdata["optimal_schedule"] = optimal.json_dump();
         jdata["optimal_schedule"]["cost_evaluations"] = State::cost_calculations;
-        debug(0) << "Dumping json to " << json_path << "\n";
+        // debug(0) << "Dumping json to " << json_path << "\n";
         std::ofstream json_file(json_path);
         json_file << jdata << std::endl;
         // json_file << std::setw(2) << jdata << std::endl;

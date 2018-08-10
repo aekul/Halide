@@ -19,7 +19,8 @@ public:
   ThroughputPredictor(std::string url="tcp://localhost:5555");
   // virtual ~ThroughputPredictor();
 
-  void enqueue(json features, double* cost);
+  void send_dag(const json &data);
+  void enqueue(const json &features, double* cost);
   bool join();
 
   // TODO: asynchronous requests
@@ -29,6 +30,7 @@ private:
   zmq::socket_t socket;
 
   int query_id_;
+  int pipeline_id_;
   std::map <int, double*> cost_map_;
 };
 
