@@ -7,7 +7,7 @@ PIPELINE_STAGES ?=20
 HL_RANDOM_DROPOUT ?=100
 HL_SEED ?=0
 HL_BEAM_SIZE ?=2
-HL_TARGET = host-new_autoscheduler
+HL_TARGET ?= host-new_autoscheduler
 ID = $(HL_TARGET)/pipe$(PIPELINE_SEED)_stages$(PIPELINE_STAGES)/schedule_seed$(HL_SEED)_dropout$(HL_RANDOM_DROPOUT)_beam$(HL_BEAM_SIZE)
 
 ifeq ($(HL_SEED), root)
