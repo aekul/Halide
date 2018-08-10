@@ -2592,28 +2592,27 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
 
     FunctionDAG dag(outputs, params, target);
 
-    // dag.dump();
-
-    // TODO(mgharbi): adds selector convnet vs. python RPC vs. built-in
-    // Convnet throughput predictor
-    // auto w = AutoScheduleModel::load_weights();
-    // auto stats = AutoScheduleModel::load_stats();
-    // ThroughputPredictorPipeline throughput_predictor(w, stats);
-    ThroughputPredictor throughput_predictor;
-
-    State optimal;
-
     json jdata;
     jdata["dag"] = dag.json_dump();
     jdata["schedule_seed"] = seed;
+    jdata["beam_size"] = beam_size;
+    jdata["autoschedule_timelimit"] = time_limit;
+    
+    ThroughputPredictor *throughput_predictor = nullptr;
+    string predictor_url = get_env_variable("HL_THROUGHPUT_PREDICTOR_URL");
+    if(!predictor_url.empty()) {
+      throughput_predictor = new ThroughputPredictor(predictor_url);
+      throughput_predictor->send_dag(jdata);
+    }
 
-    throughput_predictor.send_dag(jdata);
+    State optimal;
+
 
     if (time_limit) {
         // Use a fixed running time
         auto start = std::chrono::steady_clock::now();
         for (size_t beam_size = 1; ; beam_size *= 2) {
-            State s = optimal_schedule(dag, outputs, params, &throughput_predictor, beam_size);
+            State s = optimal_schedule(dag, outputs, params, throughput_predictor, beam_size);
             if (beam_size == 1 || s.cost < optimal.cost) {
                 optimal = s;
             }
@@ -2625,7 +2624,7 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
         }
     } else {
         // Use a fixed beam size
-        optimal = optimal_schedule(dag, outputs, params, &throughput_predictor, beam_size);
+        optimal = optimal_schedule(dag, outputs, params, throughput_predictor, beam_size);
     }
 
     debug(0) << "** Optimal schedule:\n";
@@ -2640,9 +2639,9 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
 
     // Just to dump the json features
     if(json_path.empty()) {  // do not store json dump
-      // optimal.calculate_cost(dag, params, &throughput_predictor, true, nullptr);
+      optimal.calculate_cost(dag, params, throughput_predictor, true, nullptr);
     } else {
-      optimal.calculate_cost(dag, params, &throughput_predictor, true, &jdata);
+      optimal.calculate_cost(dag, params, throughput_predictor, true, &jdata);
     }
 
     // Apply the schedules
@@ -2653,8 +2652,6 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
 
     if (!json_path.empty()) {
         // jdata["features"] = jfeatures;
-        jdata["beam_size"] = beam_size;
-        jdata["autoschedule_timelimit"] = time_limit;
         jdata["optimal_schedule"] = optimal.json_dump();
         jdata["optimal_schedule"]["cost_evaluations"] = State::cost_calculations;
         // debug(0) << "Dumping json to " << json_path << "\n";
@@ -2663,6 +2660,9 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
         // json_file << std::setw(2) << jdata << std::endl;
     }
 
+    if(throughput_predictor) {
+      delete throughput_predictor;
+    }
     return "";
 }
 
