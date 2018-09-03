@@ -16,6 +16,10 @@ else
 AUTO_SCHEDULE=true
 endif
 
+# For autoscheduler's python RPC
+ZMQ_LIBS=$(shell pkg-config --libs libzmq)
+LDFLAGS += $(ZMQ_LIBS)
+
 all: build
 
 build_shared: $(BIN)/runtime.a

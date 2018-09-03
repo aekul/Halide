@@ -29,38 +29,33 @@ public:
     Buffer<float> head2_bias;
 
     Buffer<float> filter1;
-    Buffer<float> bias1{40};
-    Buffer<float> filter2{40,40,3};
-    Buffer<float> bias2{40};
-    Buffer<float> filter3{80,40,3};
-    Buffer<float> bias3{80};
-    Buffer<float> filter4{120,80,3};
-    Buffer<float> bias4{120};
-    Buffer<float> filter5{160,120,3};
-    Buffer<float> bias5{160};
+    Buffer<float> bias1;
+    Buffer<float> filter2;
+    Buffer<float> bias2;
+    Buffer<float> filter3;
+    Buffer<float> bias3;
+    Buffer<float> filter4;
+    Buffer<float> bias4;
+    Buffer<float> filter5;
+    Buffer<float> bias5;
+    Buffer<float> filter6;
+    Buffer<float> bias6;
 
-    Buffer<float> fc1_weights{80,160};
-    Buffer<float> fc1_bias{80};
-    Buffer<float> fc2_weights{40,80};
-    Buffer<float> fc2_bias{40};
-    Buffer<float> fc3_weights{1,40};
-    Buffer<float> fc3_bias{1};
+    Func f_head1_conv{"f_head1_conv"}, f_head2_conv{"f_head2_conv"};
+    Func f_head1_relu{"f_head1_relu"}, f_head2_relu{"f_head2_relu"};
+    Func f_head1_relu_padded{"f_head1_relu_padded"}, f_head2_relu_padded{"f_head2_relu_padded"};
 
-
-    Func f_head1_conv, f_head2_conv;
-    Func f_head1_relu, f_head2_relu;
-    Func f_head1_relu_padded, f_head2_relu_padded;
-
-    Func f_conv1_stage1, f_conv1_stage2, f_conv2, f_conv3, f_conv4, f_conv5;
-    Func f_ReLU1, f_relu1_padded;
-    Func f_ReLU2, f_relu2_padded;
-    Func f_ReLU3, f_relu3_padded;
-    Func f_ReLU4, f_relu4_padded;
-    Func f_ReLU5, f_relu5_padded;
-    Func f_ReLU6, f_ReLU7;
-    Func f_pool3, f_pool3_padded, f_pool4, f_pool4_padded;
-    Func f_reduce, f_fc1, f_fc2, prediction;
-
+    Func f_conv1_stage1{"f_conv1_stage1"}, f_conv1_stage2{"f_conv1_stage2"};
+    Func f_conv2{"f_conv2"}, f_conv3{"f_conv3"}, f_conv4{"f_conv4"}, f_conv5{"f_conv5"}, f_conv6{"f_conv6"};
+    Func f_ReLU1{"f_ReLU1"}, f_relu1_padded{"f_relu1_padded"};
+    Func f_ReLU2{"f_ReLU2"}, f_relu2_padded{"f_relu2_padded"};
+    Func f_ReLU3{"f_ReLU3"}, f_relu3_padded{"f_relu3_padded"};
+    Func f_ReLU4{"f_ReLU4"}, f_relu4_padded{"f_relu4_padded"};
+    Func f_ReLU5{"f_ReLU5"}, f_relu5_padded{"f_relu5_padded"};
+    Func f_ReLU6{"f_ReLU6"}, f_relu6_padded{"f_relu6_padded"};
+    Func f_pool3{"f_pool3"}, f_pool3_padded{"f_pool3_padded"};
+    Func f_pool4{"f_pool4"}, f_pool4_padded{"f_pool4_padded"};
+    Func f_reduce{"f_reduce"}, prediction{"prediction"};
 
     ThroughputPredictorPipeline(Weights weights, Stats stats) :
         feature_stats(stats),
@@ -71,9 +66,7 @@ public:
         filter3(weights.conv3_filter), bias3(weights.conv3_bias),
         filter4(weights.conv4_filter), bias4(weights.conv4_bias),
         filter5(weights.conv5_filter), bias5(weights.conv5_bias),
-        fc1_weights(weights.fc1_filter), fc1_bias(weights.fc1_bias),
-        fc2_weights(weights.fc2_filter), fc2_bias(weights.fc2_bias),
-        fc3_weights(weights.fc3_filter), fc3_bias(weights.fc3_bias) {
+        filter6(weights.conv6_filter), bias6(weights.conv6_bias) {
 
 
         Var c("c"), w("w"), n("n");
@@ -100,6 +93,8 @@ public:
 
         RDom r5(filter5.dim(1).min(), filter5.dim(1).extent(),
                 filter5.dim(2).min(), filter5.dim(2).extent());
+
+        RDom r6(filter6.dim(0).min(), filter6.dim(0).extent());
 
         // reduce over a region that expands to 3x1 convs from the first two stages to the last two stages with zero padding
         RDom r_reduce(0, ( schedule_features.dim(2).extent() + 6 ) / 4);
@@ -169,63 +164,104 @@ public:
         // set boundary conditions for f_ReLU5
         f_relu5_padded = Halide::BoundaryConditions::constant_exterior(f_ReLU5, 0.0f, {{Expr(), Expr()}, {Expr(), Expr()}, {0, (schedule_features.dim(2).extent()+6) / 4}});
 
-        f_reduce(n, c) = 0.0f;
-        f_reduce(n, c) += f_relu5_padded(n, c, r_reduce);
+        f_conv6(n, w) = bias6();
+        f_conv6(n, w) += filter6(r6) * f_relu5_padded(n, r6, w);
+        f_ReLU6(n, w) = max(0, f_conv6(n, w));
 
-        RDom r_fc1(fc1_weights.dim(1).min(), fc1_weights.dim(1).extent());
-        RDom r_fc2(fc2_weights.dim(1).min(), fc2_weights.dim(1).extent());
-        RDom r_fc3(fc3_weights.dim(0).min(), fc3_weights.dim(0).extent());
+        // set boundary conditions for f_ReLU5
+        f_relu6_padded = Halide::BoundaryConditions::constant_exterior(f_ReLU6, 0.0f, {{Expr(), Expr()}, {0, (schedule_features.dim(2).extent()+6) / 4}});
 
-        f_fc1(n, c) = fc1_bias(c);
-        f_fc1(n, c) += f_reduce(n, r_fc1) * fc1_weights(c, r_fc1);
-        f_ReLU6(n, c) = max(0, f_fc1(n, c));
+        f_reduce(n) = 0.0f;
+        f_reduce(n) += f_relu6_padded(n, r_reduce);
 
-        f_fc2(n, c) = fc2_bias(c);
-        f_fc2(n, c) += f_ReLU6(n, r_fc2) * fc2_weights(c, r_fc2);
-        f_ReLU7(n, c) = max(0, f_fc2(n, c));
+        prediction(n) = f_reduce(n);
 
-        prediction(n) = 0.0f; //fc3_bias();
-        prediction(n) += f_ReLU7(n, r_fc3) * fc3_weights(r_fc3);
 
-        f_head1_relu.compute_at(prediction, n);
-        f_head2_relu.compute_at(prediction, n);
-        f_ReLU1.compute_at(prediction, n);
-        f_ReLU2.compute_at(prediction, n);
-        f_ReLU3.compute_at(prediction, n);
-        f_pool3.compute_at(prediction, n);
-        f_ReLU4.compute_at(prediction, n);
-        f_pool4.compute_at(prediction, n);
-        f_ReLU5.compute_at(prediction, n);
-        f_reduce.compute_at(prediction, n);
-
-        f_ReLU6.compute_at(prediction, n);
-        f_ReLU7.compute_at(prediction, n);
-        Expr batch_size = pipeline_features.dim(0).extent();
+        // schedule
+        Expr batch_size = prediction.output_buffers()[0].dim(0).extent();
         prediction.bound(n, 0, batch_size);
-        pipeline_features.dim(0).set_bounds(0, batch_size);
-        schedule_features.dim(0).set_bounds(0, batch_size);
+        // pipeline_features.dim(0).set_bounds(0, batch_size);
+        // schedule_features.dim(0).set_bounds(0, batch_size);
         Expr pipeline_length = schedule_features.dim(2).extent();
         pipeline_features.dim(3).set_bounds(0, pipeline_length);
         schedule_features.dim(2).set_bounds(0, pipeline_length);
 
-        prediction.compute_root();
+        Target t = get_jit_target_from_environment();
+        f_head1_relu.compute_at(prediction, n).specialize(batch_size >= 8).vectorize(n, 8);
+        f_head2_relu.compute_at(prediction, n).specialize(batch_size >= 8).vectorize(n, 8);
+        f_ReLU1.compute_at(prediction, n).specialize(batch_size >= 8).vectorize(n, 8);
+        f_ReLU2.compute_at(prediction, n).specialize(batch_size >= 8).vectorize(n, 8);
+        f_ReLU3.compute_at(prediction, n).specialize(batch_size >= 8).vectorize(n, 8);
+        f_pool3.compute_at(prediction, n).specialize(batch_size >= 8).vectorize(n, 8);
+        f_ReLU4.compute_at(prediction, n).specialize(batch_size >= 8).vectorize(n, 8);
+        f_pool4.compute_at(prediction, n).specialize(batch_size >= 8).vectorize(n, 8);
+        f_ReLU5.compute_at(prediction, n).specialize(batch_size >= 8).vectorize(n, 8);
+        f_ReLU6.compute_at(prediction, n).specialize(batch_size >= 8).vectorize(n, 8);
+        prediction.compute_root()
+            .specialize(batch_size >= 8).vectorize(n, 8)
+            .specialize(batch_size >= 16).parallel(n, 2);
 
-        prediction.compile_jit();
+        prediction.compile_jit(t);
     }
 
     void benchmark() {
-        Buffer<float> pipeline_feats(1000, 56, 7, 20), schedule_feats(1000, 18, 20);
+        const int batch_size = 800;
+        Buffer<float> pipeline_feats(batch_size, 56, 7, 20), schedule_feats(batch_size, 18, 20);
         pipeline_feats.fill(0.0f);
         schedule_feats.fill(0.0f);
         set_inputs(pipeline_feats, schedule_feats);
-        Buffer<float> out(1000);
+        Buffer<float> out(batch_size);
         auto t = Halide::Tools::benchmark([&]() {prediction.realize(out);});
-        debug(0) << "Throughput predictor runtime: " << (t * 1000) << " us\n";
+        debug(0) << "Throughput predictor runtime: " << ((t/batch_size) * 1000000) << " us\n";
     }
 
     void set_inputs(Buffer<float> pipeline_feats, Buffer<float> schedule_feats) {
-        pipeline_features.set(pipeline_feats);
-        schedule_features.set(schedule_feats);
+        pipeline_features.set(Buffer<float>(*pipeline_feats.raw_buffer()));
+        schedule_features.set(Buffer<float>(*schedule_feats.raw_buffer()));
+    }
+
+    Buffer<float> pipeline_feat_queue, schedule_feat_queue;
+    std::vector<double *> cost_queue;
+    int cursor;
+
+    int enqueue(int padded_stages, Buffer<float> *pipeline_feats, Buffer<float> *schedule_feats, double *cost) {
+        const int batch_size = 1024;
+        if (!pipeline_feat_queue.defined() || pipeline_feat_queue.dim(3).extent() != padded_stages) {
+            pipeline_feat_queue = Buffer<float>(batch_size, 56, 7, padded_stages);
+            schedule_feat_queue = Buffer<float>(batch_size, 18, padded_stages);
+            pipeline_feat_queue.fill(0.0f);
+            schedule_feat_queue.fill(0.0f);
+            cost_queue.clear();
+            cost_queue.resize(batch_size, nullptr);
+            cursor = 0;
+        }
+
+        if (cursor == batch_size) {
+            evaluate_costs();
+        }
+
+        *pipeline_feats = pipeline_feat_queue;
+        *schedule_feats = schedule_feat_queue;
+
+        cost_queue[cursor] = cost;
+        return cursor++;
+    }
+
+    void evaluate_costs() {
+        if (cursor == 0) return;
+
+        set_inputs(pipeline_feat_queue, schedule_feat_queue);
+        Buffer<float> costs = prediction.realize(cursor);
+
+        for (int i = 0; i < cursor; i++) {
+            internal_assert(cost_queue[i]) << "Cost queue entry was null: " << i << "\n";
+            *(cost_queue[i]) = costs(i);
+        }
+
+        pipeline_feat_queue.fill(0.0f);
+        schedule_feat_queue.fill(0.0f);
+        std::fill(cost_queue.begin(), cost_queue.end(), nullptr);
+        cursor = 0;
     }
 
 };

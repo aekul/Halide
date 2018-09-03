@@ -174,10 +174,12 @@ CXX_FLAGS += $(INTROSPECTION_CXX_FLAGS)
 CXX_FLAGS += $(EXCEPTIONS_CXX_FLAGS)
 CXX_FLAGS += $(AMDGPU_CXX_FLAGS)
 
-PY_INCLUDES = $(shell python3-config --includes)
-CXX_FLAGS += $(PY_INCLUDES)
+# PY_INCLUDES = $(shell python3-config --includes)
+# CXX_FLAGS += $(PY_INCLUDES)
 # PY_LIBS = $(shell python3-config --ldflags) -fno-lto
-# COMMON_LD_FLAGS += $(PY_LIBS)
+
+ZMQ_LIBS=$(shell pkg-config --libs libzmq)
+COMMON_LD_FLAGS += $(ZMQ_LIBS)
 
 # JSON and co
 CXX_FLAGS += -Ivendors/include
@@ -486,6 +488,7 @@ SOURCE_FILES = \
   StrictifyFloat.cpp \
   Substitute.cpp \
   Target.cpp \
+  ThroughputPredictor.cpp \
   Tracing.cpp \
   TrimNoOps.cpp \
   Tuple.cpp \
@@ -788,12 +791,8 @@ WEIGHTS_COMPONENTS = \
   trunk_conv4_weight \
   trunk_conv5_bias \
   trunk_conv5_weight \
-  trunk_fc1_bias \
-  trunk_fc1_weight \
-  trunk_fc2_bias \
-  trunk_fc2_weight \
-  trunk_fc3_bias \
-  trunk_fc3_weight \
+  trunk_conv6_bias \
+  trunk_conv6_weight \
   pipeline_mean \
   pipeline_std \
   schedule_mean \
