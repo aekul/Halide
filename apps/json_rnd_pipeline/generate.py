@@ -37,7 +37,7 @@ class GeneratorParams(object):
       "PIPELINE_STAGES": str(self.stages),
       "HL_RANDOM_DROPOUT": str(self.dropout),
       "HL_BEAM_SIZE": str(self.beam),
-      "HL_THROUGHPUT_PREDICTOR_URL": self.predictor_url,
+      #"HL_THROUGHPUT_PREDICTOR_URL": self.predictor_url,
     }
 
 def get_pipeline_env(params):
