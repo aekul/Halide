@@ -1669,14 +1669,14 @@ struct PartialScheduleNode {
 
     // The total bounds required of the given Func for one representative iteration of this loop. Computed lazily and cached.
     mutable map<const FunctionDAG::Node *, Bound> bounds;
-    const Bound &get_bounds(const FunctionDAG::Node *f) const {
+    const Bound &get_bounds(const FunctionDAG::Node *f, bool ignore_outside_consumers = true) const {
         // debug(0) << "get_bounds of " << f.name() << " in loop over " << (is_root() ? "root" : func.name()) << '\n';
         auto it = bounds.find(f);
         if (it != bounds.end()) {
             return it->second;
         }
 
-        bounds[f] = get_uncached_bounds(f);
+        bounds[f] = get_uncached_bounds(f, ignore_outside_consumers);
         return bounds[f];
     }
 
@@ -1714,7 +1714,7 @@ struct PartialScheduleNode {
                 if (!computes(e->consumer) && ignore_outside_consumers) {
                     continue;
                 }
-                const auto &c_bounds = get_bounds(e->consumer);
+                const auto &c_bounds = get_bounds(e->consumer, ignore_outside_consumers);
                 const auto *c_node = e->consumer;
                 const auto &concrete_loop = c_bounds.loops[e->consumer_stage]; // For the concrete sizes of the loop
                 const auto &symbolic_loop = c_node->stages[e->consumer_stage].loop; // Just for the var names of the loop
