@@ -433,6 +433,8 @@ SOURCE_FILES = \
   LLVM_Output.cpp \
   LLVM_Runtime_Linker.cpp \
   LoopCarry.cpp \
+  LoopNest.cpp \
+  LoopNestFeaturizer.cpp \
   Lower.cpp \
   LowerWarpShuffles.cpp \
   MatlabWrapper.cpp \
