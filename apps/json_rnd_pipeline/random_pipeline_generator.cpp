@@ -246,12 +246,12 @@ public:
             int kernel_min = rand_int(-3, 0);
             int kernel_max = rand_int(0, 3);
             return convolve(f, dim, kernel_min, kernel_max);
-        } else if (stage_type == 1) {
+        } else if (stage_type == 1 && false) {
             int dim = rand_int(0, 1);
             int kernel_min = rand_int(-10, 0);
             int kernel_max = rand_int(0, 10);
             return convolve_r(f, dim, kernel_min, kernel_max);
-        } else if (stage_type == 2) {
+        } else if (stage_type == 2 && false) {
             int dim = rand_int(0, 1);
             int kernel_min = rand_int(-10, 0);
             int kernel_max = rand_int(0, 10);
@@ -277,13 +277,13 @@ public:
         } else if (stage_type == 5) {
             int dim = 2;
             return all_to_all(f, dim);
-        } else if (stage_type == 6) {
+        } else if (stage_type == 6 && false) {
             int dim = 2;
             return all_to_all_r(f, dim);
-        } else if (stage_type == 7) {
+        } else if (stage_type == 7 && false) {
             int dim = 2;
             return all_to_all_w(f, dim);
-        } else if (stage_type == 8) {
+        } else if (stage_type == 8 && false) {
             int dim = rand_int(0, 2);
             return scan(f, dim);
         } else if (stage_type == 9 && false) {
