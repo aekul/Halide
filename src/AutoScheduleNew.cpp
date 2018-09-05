@@ -1062,17 +1062,12 @@ struct PartialScheduleNode {
                 }
             }            
 
-            // The random pipeline generator creates a func ("input_im")
-            // that calls "input" (the actual input image) i.e. input_im(x, y, ...) = input(x, y, ...).
-            // "input" is not part of the FunctionDAG and we can't create calls to it because
-            // it's an undefined image. So don't try to inline "input_im" by
-            // replacing it with "input", just retain "input_im"
 
-            if (!is_inlined || op->name == "input_im") {
+            if (!is_inlined) {
                 std::string name = op->name;
-                if (name == "input") {
-                  name = "input_im";
-                }
+                //if (name == "input") {
+                  //name = "input_im";
+                //}
                 vector<Expr> args;
                 for (size_t i = 0; i < new_args.size(); i++) {
                     std::string key = name + ".v" + std::to_string(i) + ".min";
@@ -1277,10 +1272,10 @@ struct PartialScheduleNode {
             num_cores /= s;
         }
 
-        auto add_alloc_node = [&](const FunctionDAG::Node *f) {
+        auto add_alloc_node = [&](const FunctionDAG::Node *f, const std::string& name) {
             std::unique_ptr<AllocNode> alloc = make_unique<AllocNode>();
             alloc->parent = block;
-            alloc->name = f->func.name();
+            alloc->name = name;
             alloc->bytes_per_point = f->bytes_per_point;
             alloc->size = 1;
             int stride = 1;
@@ -1294,7 +1289,7 @@ struct PartialScheduleNode {
                 alloc->region.push_back(extent);
                 alloc->size *= extent;
 
-                std::string key = var_base_name(f->func.name(), j);
+                std::string key = var_base_name(name, j);
                 store_at_bounds[key] = substitute(compute_bounds, b.region_computed_symbolic[j].first);
                 compute_bounds[key] = store_at_bounds[key];
                 strides[key] = stride;
@@ -1303,20 +1298,35 @@ struct PartialScheduleNode {
             block->add_child(std::move(alloc));
         };
 
+        if (is_root()) {
+            // The random pipeline generator creates a func ("input_im")
+            // that calls "input" (the actual input image) i.e. input_im(x, y, ...) = input(x, y, ...).
+            // "input" is not part of the FunctionDAG so manually check if
+            // "image_im" is part of the DAG. If it is, add an alloc node for "image"
+            for (int i = 0, N = dag.nodes.size(); i < N; i++) {
+                const auto& f = &dag.nodes[i];
+
+                if (f->func.name() != "input_im") {
+                  continue;
+                }
+
+                add_alloc_node(f, "input");
+            }
+        }
+
         // Alloc in reverse topological order
         for (int i = 0, N = dag.nodes.size(); i < N; i++) {
             const auto& f = &dag.nodes[i];
 
-            // In case a particular func has not been scheduled or its the input
-            // image, store it root; store_at bounds are needed when computing the 
-            // bounds of calls to that func
-            bool store_root = is_root() && (!is_stored_or_inlined_in_tree(&dag.nodes[i]) || f->func.name() == "input_im");
+            // In case a particular func has not been scheduled; store_at 
+            // bounds are needed when computing the bounds of calls to that func
+            bool store_root = is_root() && !is_stored_or_inlined_in_tree(&dag.nodes[i]);
 
             if (store_at.count(f) == 0 && !store_root) { 
                 continue;
             }
 
-            add_alloc_node(f);
+            add_alloc_node(f, f->func.name());
         } 
 
         for (int i = children.size() - 1; i >= 0; i--) {
