@@ -232,10 +232,11 @@ struct FunctionDAG {
 
         // A mutator to apply parameter estimates to the expressions
         // we encounter while constructing the graph.
-        class ApplyParamEstimates : public IRMutator {
-            using IRMutator::visit;
+        class ApplyParamEstimates : public IRMutator2 {
+            using IRMutator2::visit;
 
-            void visit(const Variable *op) override {
+            Expr visit(const Variable *op) override {
+                Expr expr;
                 if (op->param.defined()) {
                     if (!op->param.is_buffer()) {
                         expr = op->param.estimate();
@@ -248,10 +249,11 @@ struct FunctionDAG {
                             }
                         }
                     }
+                    internal_assert(expr.defined()) << "Missing estimate for " << op->name << '\n';
+                    return expr;
                 } else {
-                    expr = op;
+                    return op;
                 }
-                internal_assert(expr.defined()) << "Missing estimate for " << op->name << '\n';
             }
         } apply_param_estimates;
 
@@ -821,12 +823,12 @@ private:
     void operator=(const FunctionDAG &other) = delete;
 };  // FunctionDAG
 
-vector<vector<int64_t>> generate_tilings(const vector<int64_t> &s, int d, bool allow_splits, int vector_dim, int vector_size) {
+vector<vector<int64_t>> generate_tilings(const vector<int64_t> &s, int d, int factor, bool allow_splits, int vector_dim, int vector_size) {
     vector<vector<int64_t>> result;
     if (d == -1) {
         result.push_back(vector<int64_t>());
     } else {
-        auto v = generate_tilings(s, d - 1, allow_splits, vector_dim, vector_size);
+        auto v = generate_tilings(s, d - 1, factor, allow_splits, vector_dim, vector_size);
         for (auto t : v) {
             bool is_full = false, is_one = false;
             // Skip trivial tilings
@@ -848,7 +850,7 @@ vector<vector<int64_t>> generate_tilings(const vector<int64_t> &s, int d, bool a
                     result.push_back(t);
                 }
             } else {
-                for (int outer = 1; outer <= s[d]; outer *= 2) {
+                for (int outer = 1; outer <= s[d]; outer *= factor) {
                     int inner = (s[d] + outer - 1) / outer;
                     if (is_one && outer == 1) continue;
                     if (is_full && outer == s[d]) continue;
@@ -856,7 +858,7 @@ vector<vector<int64_t>> generate_tilings(const vector<int64_t> &s, int d, bool a
                     t.back() = outer;
                     result.push_back(t);
                 }
-                for (int inner = 1; inner < s[d]; inner *= 2) {
+                for (int inner = 1; inner < s[d]; inner *= factor) {
                     int outer = (s[d] + inner - 1) / inner;
                     if (is_one && outer == 1) continue;
                     if (is_full && outer == s[d]) continue;
@@ -897,7 +899,7 @@ struct ScheduleFeatures {
     int64_t innermost_bytes_at_production = 0;
     int64_t innermost_bytes_at_root = 0;
 
-    int64_t bytes_read_per_tile = 0; // Number of bytes loaded from all inputs per tile (TODO: Not particularly useful without knowing how many times this runs)
+    int64_t bytes_read_per_tile = 0; // Number of bytes loaded from alnputs per tile (TODO: Not particularly useful without knowing how many times this runs)
 
     int64_t inlined_calls = 0; // For inlined Funcs, how many calls are made to this Func total
 
@@ -907,6 +909,12 @@ struct ScheduleFeatures {
     int64_t allocation_bytes_read_per_realization = 0; // The sum of the sizes of the allocations accessed per production. Gives a hint as to the likely locality of it.
 
     int64_t working_set = 0; // The sum of the sizes of the allocations within the production of this Func. Probably a good thing if it fits in cache.
+
+    int64_t vector_size = 0; // The vectorization factor (#simd lanes) to be used to compute this stage. Wasted work if innermost_pure_loop is not a multiple of this, or if it's smaller than the stage's native vector size (which is in the pipeline features).
+
+    int64_t rounded_innermost_pure_loop_extent = 0; // Innermost pure loop extend rounded up to the next multiple of the vector size
+
+    int native_vector_size; // The native vector size for the narrowest type used.
 
     void dump() const {
         debug(0) << "    num_realizations:                      " << num_realizations << '\n'
@@ -930,8 +938,12 @@ struct ScheduleFeatures {
                  << "    bytes_read_per_realization:            " << bytes_read_per_realization << '\n'
                  << "    lines_read_per_realization:            " << lines_read_per_realization << '\n'
                  << "    allocation_bytes_read_per_realization: " << allocation_bytes_read_per_realization << '\n'
-                 << "    working_set:                           " << working_set << '\n';
+                 << "    working_set:                           " << working_set << '\n'
+                 << "    vector_size:                           " << vector_size << '\n'
+                 << "    rounded_innermost_pure_loop_extent     " << rounded_innermost_pure_loop_extent << '\n'
+                 << "    native_vector_size:                    " << vector_size << '\n';
     }
+
     json json_dump(bool as_vector=true) const {
         json jdata;
         if (as_vector) {
@@ -953,7 +965,8 @@ struct ScheduleFeatures {
               innermost_bytes_at_production,
               innermost_bytes_at_root,
               bytes_read_per_tile,
-              inlined_calls };
+              inlined_calls 
+            };
         } else {
             jdata["num_realizations"]                = num_realizations;
             jdata["num_productions"]                 = num_productions;
@@ -976,7 +989,36 @@ struct ScheduleFeatures {
         }
         return jdata;
     }
-};  // ScheduleFeatures
+}; // ScheduleFeatures
+
+struct Constraints {
+    virtual bool must_root(const FunctionDAG::Node *node) const { return false; }
+    virtual bool must_inline(const FunctionDAG::Node *node) const { return false; }
+    virtual bool may_subtile() const { return true; }
+    virtual bool may_serialize(const FunctionDAG::Node::Stage *stage, int dim) const { return true; }
+    virtual int tiling_factor() const { return 2; }
+};
+
+struct CoarsePassConstraints : public Constraints {
+    const MachineParams &params;
+    CoarsePassConstraints(const MachineParams &p) : params(p) {}
+    bool may_subtile() const override { return false; }
+    int tiling_factor() const override { return params.parallelism; }
+};
+
+struct FinePassConstraints : public Constraints {
+    set<const FunctionDAG::Node *> roots;
+    map<const FunctionDAG::Node::Stage *, int> parallel_dims;
+
+    bool must_root(const FunctionDAG::Node *node) const override {
+        return roots.find(node) != roots.end();
+    }
+
+    bool may_serialize(const FunctionDAG::Node::Stage *stage, int dim) const override {
+        auto it = parallel_dims.find(stage);
+        return (it == parallel_dims.end()) || (it->second != dim);
+    }
+};
 
 // We're going to do a tree search over possible schedules to find an
 // optimal one. A tree search requires a state, and a function that
@@ -1028,7 +1070,7 @@ struct PartialScheduleNode {
             hash_combine(h, store_at.size());
             hash_combine(h, children.size());
             for (uint64_t s : size) {
-                hash_combine(h, s == 1);
+                hash_combine(h, s);
             }
             for (auto c : children) {
                 c->structural_hash(h, depth - 1);
@@ -1452,186 +1494,7 @@ struct PartialScheduleNode {
             for (auto c : children) {
                 c->compute_features(params, compute_site, store_site, subinstances, parallelism, this, root, &working_set_here, features);
             }
-        } else {
 
-            int64_t parallel_tasks = parent->is_root() ? pure_loop_instances : 1;
-            int64_t subparallelism = parallel_tasks * parallelism;
-
-            // Figure out the features at the compute_at level
-            vector<ScheduleFeatures> &func_features = (*features)[node];
-            if (func_features.empty()) {
-                func_features.resize(node->stages.size());
-            }
-            ScheduleFeatures &feat = func_features[stage_idx];
-
-            if (innermost) {
-                // Figure out the features at the innermost loop cluster level
-                feat.innermost_loop_extent = size.empty() ? 1 : size[0];
-
-                feat.innermost_pure_loop_extent = 1;
-                size_t i = 0;
-                for (auto l : stage->loop) {
-                    if (l.pure) {
-                        feat.innermost_pure_loop_extent = size[i];
-                        break;
-                    }
-                    i++;
-                }
-            }
-
-            const bool at_production = parent->node != node;
-            const bool at_pure_production = at_production && stage_idx == 0;
-
-            if (at_production) {
-                feat.num_productions = instances;
-                feat.inner_parallelism = parallel_tasks;
-                feat.outer_parallelism = parallelism;
-
-                const auto &bounds = parent->get_bounds(node);
-
-                feat.bytes_at_production = node->bytes_per_point;
-                for (auto p : bounds.region_computed) {
-                    feat.bytes_at_production *= (p.second - p.first) + 1;
-                }
-                int64_t innermost_storage_extent = 1;
-                if (!bounds.region_computed.empty()) {
-                    innermost_storage_extent = bounds.region_computed[0].second - bounds.region_computed[0].first + 1;
-                }
-                feat.innermost_bytes_at_production = node->bytes_per_point * innermost_storage_extent;
-            }
-
-            for (auto c : children) {
-                c->compute_features(params, compute_site, store_site, subinstances, subparallelism, this, root, &working_set_here, features);
-            }
-
-            if (at_production) {
-                for (const auto *node : store_at) {
-                    working_set_here += (*features)[node][0].bytes_at_production;
-                }
-                feat.working_set = working_set_here;
-            }
-
-            *working_set += working_set_here;
-
-            int64_t bytes_loaded = 0, lines_loaded = 0, allocation_bytes_loaded = 0;
-            if (innermost || at_production) {
-                // Pick the site at which we will compute the footprint relationship
-                const auto *consumer_store_site = innermost ? parent : store_site.find(node)->second;
-                int consumer_instances = innermost ? instances : feat.num_realizations;
-
-                vector<const FunctionDAG::Node *> pending;
-                pending.push_back(node);
-                while (!pending.empty()) {
-                    const auto &next = pending.back()->incoming_edges;
-                    pending.pop_back();
-                    for (const auto *e : next) {
-                        auto it = compute_site.find(e->producer);
-                        if (it == compute_site.end()) {
-                            // Producer was inlined, recursively examine its inputs
-                            pending.push_back(e->producer);
-                            continue;
-                        }
-
-                        const auto *producer_compute_site = it->second;
-                        const auto *producer_store_site = store_site.find(e->producer)->second;
-                        const auto &bounds = consumer_store_site->get_bounds(e->producer);
-                        const auto &producer_compute_bounds = producer_compute_site->get_bounds(e->producer);
-                        const auto &producer_store_bounds = producer_store_site->get_bounds(e->producer);
-                        int64_t footprint = e->producer->bytes_per_point;
-                        int64_t compute_footprint = footprint;
-                        int64_t store_footprint = footprint;
-                        int64_t line_footprint = 1;
-                        int64_t compute_line_footprint = 1;
-                        int64_t store_line_footprint = 1;
-                        bool discontinuous = false;
-
-                        internal_assert(bounds.region_required.size() == producer_compute_bounds.region_computed.size());
-                        internal_assert(bounds.region_required.size() == producer_store_bounds.region_computed.size());
-                        for (size_t i = 0; i < bounds.region_required.size(); i++) {
-                            auto p = bounds.region_required[i];
-                            auto compute_p = producer_compute_bounds.region_computed[i];
-                            auto store_p = producer_store_bounds.region_required[i];
-                            int64_t extent = p.second - p.first + 1;
-                            int64_t compute_extent = compute_p.second - compute_p.first + 1;
-                            int64_t store_extent = store_p.second - store_p.first + 1;
-                            footprint *= extent;
-                            compute_footprint *= compute_extent;
-                            store_footprint *= store_extent;
-                            if (discontinuous) {
-                                line_footprint *= extent;
-                                compute_line_footprint *= compute_extent;
-                                store_line_footprint *= store_extent;
-                            }
-                            // Allocated extent might be smaller than extent if
-                            // the producer was fused into this consumer. If
-                            // it's larger, we may be reading from something
-                            // that was computed at a much coarser
-                            // granularity.
-                            // discontinuous |= (store_extent > extent);
-                            discontinuous = true;
-                        }
-
-
-                        int64_t store_instances_per_consumption = 1;
-                        const auto &producer_feat = (*features)[e->producer];
-                        if (!producer_feat.empty()) {
-                            // The producer's realization is nested inside this Func's realization
-                            const int64_t producer_store_instances = producer_feat[0].num_realizations;
-                            if (producer_store_instances > consumer_instances) {
-                                store_instances_per_consumption = producer_store_instances / consumer_instances;
-                            }
-                        }
-
-                        allocation_bytes_loaded += compute_footprint;
-
-                        if (store_instances_per_consumption > 1) {
-                            // The producer is nested inside the consumer
-                            bytes_loaded += store_footprint * store_instances_per_consumption;
-                            // Due to folding, the actual buffer size is smaller than the bounds at the store level
-                            lines_loaded += store_line_footprint * store_instances_per_consumption;
-                        } else {
-                            // The consumer is consuming some portion of a larger producer computed earlier
-                            bytes_loaded += footprint;
-                            lines_loaded += line_footprint;
-                        }
-                    }
-                }
-            }
-
-            // TODO: consider input images in these bytes-read metrics.
-            if (innermost) {
-                feat.bytes_read_per_tile = bytes_loaded;
-            }
-
-            if (at_production) {
-                feat.bytes_read_per_realization = bytes_loaded;
-                feat.allocation_bytes_read_per_realization = allocation_bytes_loaded;
-                feat.lines_read_per_realization = lines_loaded;
-
-                if (!at_pure_production) {
-                    // Also pessimistically assume this update definition relies on the entirety of the produced region so far.
-                    // TODO: This overbills scatters, or writes to a restriction region.
-                    feat.bytes_read_per_realization += feat.bytes_at_production;
-                    feat.lines_read_per_realization++; // It's accessed contiguously
-                    feat.allocation_bytes_read_per_realization += feat.bytes_at_production;
-                }
-            }
-
-            if (at_pure_production) {
-                feat.points_computed_per_production = feat.points_computed_total / instances;
-            }
-        }
-
-        // Track features for inlined Funcs
-        for (auto p : inlined) {
-            auto &f = p.first;
-            vector<ScheduleFeatures> &func_features = (*features)[f];
-            func_features.resize(1);
-            auto &feat = func_features[0];
-            feat.inlined_calls += p.second * subinstances;
-        }
-
-        if (is_root()) {
             // Figure out the root-level features for every Func
             for (auto &p : *features) {
                 const auto *node = p.first;
@@ -1656,6 +1519,202 @@ struct PartialScheduleNode {
                     s++;
                 }
             }
+
+            return;
+        }
+
+        int64_t parallel_tasks = parent->is_root() ? pure_loop_instances : 1;
+        int64_t subparallelism = parallel_tasks * parallelism;
+
+        // Figure out the features at the compute_at level
+        vector<ScheduleFeatures> &func_features = (*features)[node];
+        if (func_features.empty()) {
+            func_features.resize(node->stages.size());
+        }
+        ScheduleFeatures &feat = func_features[stage_idx];
+
+        if (innermost) {
+            // Figure out the features at the innermost loop cluster level
+            feat.innermost_loop_extent = size.empty() ? 1 : size[0];
+
+            feat.innermost_pure_loop_extent = 1;
+            size_t i = 0;
+            for (auto l : stage->loop) {
+                if (l.pure) {
+                    feat.innermost_pure_loop_extent = size[i];
+                    break;
+                }
+                i++;
+            }
+        }
+
+        const bool at_production = parent->node != node;
+        const bool at_pure_production = at_production && stage_idx == 0;
+
+        if (at_production) {
+            feat.num_productions = instances;
+            feat.inner_parallelism = parallel_tasks;
+            feat.outer_parallelism = parallelism;
+            feat.vector_size = stage->vector_size;
+            feat.native_vector_size = stage->vector_size;
+
+            const auto &bounds = parent->get_bounds(node);
+
+            feat.bytes_at_production = node->bytes_per_point;
+            for (auto p : bounds.region_computed) {
+                feat.bytes_at_production *= (p.second - p.first) + 1;
+            }
+            int64_t innermost_storage_extent = 1;
+            if (!bounds.region_computed.empty()) {
+                innermost_storage_extent = bounds.region_computed[0].second - bounds.region_computed[0].first + 1;
+            }
+            feat.innermost_bytes_at_production = node->bytes_per_point * innermost_storage_extent;
+        }
+
+        for (auto c : children) {
+            c->compute_features(params, compute_site, store_site, subinstances, subparallelism, this, root, &working_set_here, features);
+        }
+
+        if (at_production) {
+            for (const auto *node : store_at) {
+                working_set_here += (*features)[node][0].bytes_at_production;
+            }
+            feat.working_set = working_set_here;
+            feat.rounded_innermost_pure_loop_extent = ((feat.innermost_pure_loop_extent + feat.vector_size - 1) / feat.vector_size) * feat.vector_size;
+        }
+
+        *working_set += working_set_here;
+
+        int64_t bytes_loaded = 0, lines_loaded = 0, allocation_bytes_loaded = 0;
+        if (innermost || at_production) {
+            // Pick the site at which we will compute the footprint relationship
+            const auto *consumer_store_site = innermost ? parent : store_site.find(node)->second;
+            int consumer_instances = innermost ? instances : feat.num_realizations;
+
+            vector<const FunctionDAG::Node *> pending;
+            pending.push_back(node);
+            while (!pending.empty()) {
+                const auto &next = pending.back()->incoming_edges;
+                pending.pop_back();
+                for (const auto *e : next) {
+                    auto it = compute_site.find(e->producer);
+                    if (it == compute_site.end()) {
+                        // Producer was inlined, recursively examine its inputs
+                        pending.push_back(e->producer);
+                        continue;
+                    }
+
+                    const auto *producer_compute_site = it->second;
+                    const auto *producer_store_site = store_site.find(e->producer)->second;
+                    const auto &bounds = consumer_store_site->get_bounds(e->producer);
+                    const auto &producer_compute_bounds = producer_compute_site->get_bounds(e->producer);
+                    const auto &producer_store_bounds = producer_store_site->get_bounds(e->producer);
+                    int64_t footprint = e->producer->bytes_per_point;
+                    int64_t compute_footprint = footprint;
+                    int64_t store_footprint = footprint;
+                    int64_t line_footprint = 1;
+                    int64_t compute_line_footprint = 1;
+                    int64_t store_line_footprint = 1;
+                    bool discontinuous = false;
+
+                    internal_assert(bounds.region_required.size() == producer_compute_bounds.region_computed.size());
+                    internal_assert(bounds.region_required.size() == producer_store_bounds.region_computed.size());
+                    for (size_t i = 0; i < bounds.region_required.size(); i++) {
+                        auto p = bounds.region_required[i];
+                        auto compute_p = producer_compute_bounds.region_computed[i];
+                        auto store_p = producer_store_bounds.region_required[i];
+                        int64_t extent = p.second - p.first + 1;
+                        int64_t compute_extent = compute_p.second - compute_p.first + 1;
+                        int64_t store_extent = store_p.second - store_p.first + 1;
+                        footprint *= extent;
+                        compute_footprint *= compute_extent;
+                        store_footprint *= store_extent;
+                        if (discontinuous) {
+                            line_footprint *= extent;
+                            compute_line_footprint *= compute_extent;
+                            store_line_footprint *= store_extent;
+                        }
+                        // Allocated extent might be smaller than extent if
+                        // the producer was fused into this consumer. If
+                        // it's larger, we may be reading from something
+                        // that was computed at a much coarser
+                        // granularity.
+                        // discontinuous |= (store_extent > extent);
+                        discontinuous = true;
+                    }
+
+
+                    int64_t store_instances_per_consumption = 1;
+                    const auto &producer_feat = (*features)[e->producer];
+                    if (!producer_feat.empty()) {
+                        // The producer's realization is nested inside this Func's realization
+                        const int64_t producer_store_instances = producer_feat[0].num_realizations;
+                        if (producer_store_instances > consumer_instances) {
+                            store_instances_per_consumption = producer_store_instances / consumer_instances;
+                        }
+                    }
+
+                    allocation_bytes_loaded += compute_footprint;
+
+                    if (store_instances_per_consumption > 1) {
+                        // The producer is nested inside the consumer
+                        bytes_loaded += store_footprint * store_instances_per_consumption;
+                        // Due to folding, the actual buffer size is smaller than the bounds at the store level
+                        lines_loaded += store_line_footprint * store_instances_per_consumption;
+                    } else {
+                        // The consumer is consuming some portion of a larger producer computed earlier
+                        bytes_loaded += footprint;
+                        lines_loaded += line_footprint;
+                    }
+                }
+            }
+        }
+
+        // TODO: consider input images in these bytes-read metrics.
+        if (innermost) {
+            feat.bytes_read_per_tile = bytes_loaded;
+        }
+
+        if (at_production) {
+            feat.bytes_read_per_realization = bytes_loaded;
+            feat.allocation_bytes_read_per_realization = allocation_bytes_loaded;
+            feat.lines_read_per_realization = lines_loaded;
+
+            if (!at_pure_production) {
+                // Also pessimistically assume this update definition relies on the entirety of the produced region so far.
+                // TODO: This overbills scatters, or writes to a restriction region.
+                feat.bytes_read_per_realization += feat.bytes_at_production;
+                feat.lines_read_per_realization++; // It's accessed contiguously
+                feat.allocation_bytes_read_per_realization += feat.bytes_at_production;
+            }
+        }
+
+        if (at_pure_production) {
+            feat.points_computed_per_production = feat.points_computed_total / instances;
+        }
+
+        // Track features for inlined Funcs
+        for (auto p : inlined) {
+            auto &f = p.first;
+            vector<ScheduleFeatures> &func_features = (*features)[f];
+            func_features.resize(1);
+            auto &inlined_feat = func_features[0];
+            inlined_feat.inlined_calls += p.second * subinstances;
+            inlined_feat.native_vector_size = (int64_t)(stage->vector_size);
+            if (inlined_feat.vector_size > 0) {
+                inlined_feat.vector_size = std::min(inlined_feat.vector_size, (int64_t)stage->vector_size);
+            } else {
+                inlined_feat.vector_size = feat.vector_size;
+            }
+            if (inlined_feat.innermost_pure_loop_extent > 0) {
+                inlined_feat.innermost_pure_loop_extent = std::min(inlined_feat.innermost_pure_loop_extent,
+                                                                   feat.innermost_pure_loop_extent);
+            } else {
+                inlined_feat.innermost_pure_loop_extent = feat.innermost_pure_loop_extent;
+            }
+            inlined_feat.rounded_innermost_pure_loop_extent =
+                ((inlined_feat.innermost_pure_loop_extent + inlined_feat.vector_size - 1) /
+                 inlined_feat.vector_size) * inlined_feat.vector_size;
         }
     }
 
@@ -1957,6 +2016,7 @@ struct PartialScheduleNode {
     // Return all possible ways to compute f in tiles.
     vector<PartialScheduleNode> compute_in_tiles(const FunctionDAG::Node *f,
                                                  const PartialScheduleNode *parent,
+                                                 const Constraints *constraints,
                                                  const MachineParams &params,
                                                  bool in_realization) const {
         vector<PartialScheduleNode> result;
@@ -2001,30 +2061,36 @@ struct PartialScheduleNode {
             result.emplace_back(std::move(r));
         }
 
-        if (f->outgoing_edges.empty()) {
-            // Can't tile outputs
+        if (f->outgoing_edges.empty() || constraints->must_root(f)) {
+            // Not permitted to tile
             return result;
         }
 
         if (tileable) {
             // Generate a list of tile sizes to try
-            auto tilings = generate_tilings(size, (int)(size.size() - 1), !in_realization, vector_dim, innermost ? vector_size : 1);
+            auto tilings = generate_tilings(size, (int)(size.size() - 1), constraints->tiling_factor(), !in_realization, vector_dim, innermost ? vector_size : 1);
 
             for (auto t : tilings) {
                 if (parent->is_root()) {
                     const auto &l = stage->loop;
-                    // Skip root-level tilings that provide insufficient parallelism to avoid nested parallelism
-
-                    bool ok = false;
+                    // Skip root-level tilings that provide
+                    // insufficient parallelism to avoid nested
+                    // parallelism, and root-level tilings that would
+                    // force serialization of dimensions we have
+                    // decided to parallelize over in an earlier pass.
+                    bool good = false;
+                    bool bad = false;
                     int total = 1;
                     size_t idx = 0;
                     for (auto s : t) {
-                        if (l[idx++].pure) {
+                        if (l[idx].pure) {
                             total *= s;
-                            ok |= s >= params.parallelism;
+                            good |= s >= params.parallelism;
                         }
+                        bad |= (s < params.parallelism) && (!constraints->may_serialize(stage, idx));
+                        idx++;
                     }
-                    if (!ok || total < params.parallelism) continue;
+                    if (bad || !good || total < params.parallelism) continue;
                 }
 
                 // Skip tilings of the innermost loop that leave too few loop iterations to vectorize well
@@ -2123,7 +2189,7 @@ struct PartialScheduleNode {
                     // loop.
                     PartialScheduleNode store_at_here = std::move(outer);
                     store_at_here.store_at.insert(f);
-                    auto v = inner->compute_in_tiles(f, &store_at_here, params, true);
+                    auto v = inner->compute_in_tiles(f, &store_at_here, constraints, params, true);
                     for (PartialScheduleNode n : v) {
                         store_at_here.children.pop_back();
                         store_at_here.children.emplace_back(new PartialScheduleNode(std::move(n)));
@@ -2150,7 +2216,7 @@ struct PartialScheduleNode {
                     // level, so this would constrain parallelism.
                     continue;
                 }
-                auto v = children[child]->compute_in_tiles(f, this, params, store_here);
+                auto v = children[child]->compute_in_tiles(f, this, constraints, params, store_here);
                 for (PartialScheduleNode n : v) {
                     // (Only valid if one child calls f) Push the
                     // computation into the child. Possibly leaving
@@ -2457,7 +2523,7 @@ struct State {
                     // the universe to benchmark. We define 'silly' as
                     // doing more than 10x redundant recompute for any one
                     // stage.
-                    // if (feat.points_computed_total + feat.inlined_calls > 10*feat.points_computed_minimum) return false;
+                    if (feat.points_computed_total + feat.inlined_calls > 10*feat.points_computed_minimum) return false;
 
                     if (verbose) {
                         debug(0) << "Schedule features for " << p.first->func.name() << " stage " << s << "\n";
@@ -2473,12 +2539,20 @@ struct State {
                     }
 
                     // We can only compute in multiples of the vector size
+                    /*
                     if (feat.inlined_calls == 0) {
                         int64_t vectors = (feat.innermost_pure_loop_extent + stage.vector_size - 1) / stage.vector_size;
                         vectors *= feat.points_computed_total / feat.innermost_pure_loop_extent;
                         compute_cost = per_element_compute_cost * vectors * stage.vector_size;
                         // TODO: doesn't capture compute inflation on stages inlined into this one! Need vector overcompute as a feature, probably
                     }
+                    */
+                    compute_cost = per_element_compute_cost * feat.points_computed_total;
+
+                    // Figure out vector overcompute
+                    const int native_vector_size = feat.native_vector_size;
+                    const double idle_simd_lanes = (double)native_vector_size / feat.vector_size;
+                    const double vector_recompute = (double)feat.rounded_innermost_pure_loop_extent / feat.innermost_pure_loop_extent;
 
                     if (feat.inner_parallelism > 1) {
                         // Few parallel tasks may be a bad idea due to
@@ -2512,6 +2586,8 @@ struct State {
                     const double per_element_compute_cost_inlined = std::max(0.0, per_element_compute_cost - per_element_compute_cost_of_memcpy);
                     const double compute_cost_inlined = per_element_compute_cost_inlined * feat.inlined_calls;
                     compute_cost += compute_cost_inlined;
+
+                    compute_cost *= idle_simd_lanes * vector_recompute;
 
                     double cache_misses = 0, cost_of_miss = 0;
                     if (feat.inlined_calls == 0) {
@@ -2567,8 +2643,11 @@ struct State {
         return true;
     }
 
+
+
     void generate_children(const FunctionDAG &dag,
                            const MachineParams &params,
+                           const Constraints *constraints,
                            ThroughputPredictor* throughput_predictor,
                            std::function<void(State *)> &accept_child) {
         internal_assert(root.is_root());
@@ -2601,30 +2680,32 @@ struct State {
 
         int num_children = 0;
 
-        // 1) Inline it
-        if (node->stages.size() == 1 && !node->outgoing_edges.empty()) {
-            auto child = new State(*this);
-            child->root = child->root.inline_func(node);
-            child->num_funcs_scheduled++;
-            if (child->calculate_cost(dag, params, throughput_predictor)) {
-                internal_assert(child->root.computes(node)) << "Failed to inline " << node->func.name() << '\n';
-                num_children++;
-                accept_child(child);
+        if (!constraints->must_root(node)) {
+            // 1) Inline it
+            if (node->stages.size() == 1 && !node->outgoing_edges.empty()) {
+                auto child = new State(*this);
+                child->root = child->root.inline_func(node);
+                child->num_funcs_scheduled++;
+                if (child->calculate_cost(dag, params, throughput_predictor)) {
+                    internal_assert(child->root.computes(node)) << "Failed to inline " << node->func.name() << '\n';
+                    num_children++;
+                    accept_child(child);
+                }
             }
         }
 
-        // 2) Realize it somewhere
-        auto tile_options = root.compute_in_tiles(node, nullptr, params, false);
-        for (PartialScheduleNode n : tile_options) {
-            auto child = new State(*this);
-            child->root = std::move(n);
-            child->num_funcs_scheduled++;
-            if (child->calculate_cost(dag, params, throughput_predictor)) {
-                internal_assert(child->root.computes(node)) 
-                  << "Failed to inject realization of " 
-                  << node->func.name() << '\n';
-                num_children++;
-                accept_child(child);
+        if (!constraints->must_inline(node)) {
+            // 2) Realize it somewhere
+            auto tile_options = root.compute_in_tiles(node, nullptr, constraints, params, false);
+            for (PartialScheduleNode n : tile_options) {
+                auto child = new State(*this);
+                child->root = std::move(n);
+                child->num_funcs_scheduled++;
+                if (child->calculate_cost(dag, params, throughput_predictor)) {
+                    internal_assert(child->root.computes(node)) << "Failed to inject realization of " << node->func.name() << '\n';
+                    num_children++;
+                    accept_child(child);
+                }
             }
         }
 
@@ -2695,13 +2776,16 @@ struct CompareStates {
     }
 };
 
-State optimal_schedule(FunctionDAG &dag,
-                       vector<Function> outputs,
-                       const MachineParams &params,
-                       ThroughputPredictor* throughput_predictor,
-                       int beam_size) {
+State optimal_schedule_pass(FunctionDAG &dag,
+                            vector<Function> outputs,
+                            const MachineParams &params,
+                            const Constraints *constraints,
+                            ThroughputPredictor* throughput_predictor,
+                            int beam_size) {
 
-    std::priority_queue<std::shared_ptr<State>, std::vector<std::shared_ptr<State>>, CompareStates> q;
+    std::priority_queue<std::shared_ptr<State>,
+                        std::vector<std::shared_ptr<State>>,
+                        CompareStates> q;
 
     q.emplace(new State);
 
@@ -2733,18 +2817,32 @@ State optimal_schedule(FunctionDAG &dag,
     std::function<void(State *)> enqueue_new_children = [&](State *s) {
         //debug(0) << "\n** Generated child: ";
         //s->dump();
-        //s->calculate_cost(dag, params, nullptr, true);
+        // s->calculate_cost(dag, params, nullptr, true);
 
         tick(double(s->num_funcs_scheduled) / dag.nodes.size());
         unevaluated_states.push_back(std::shared_ptr<State>(s));
     };
 
     for (int i = 0; ; i++) {
-        decltype(q) pending, deferred;
+        decltype(q) pending;
         q.swap(pending);
 
-        // int depth = 1;
-        // std::set<uint64_t> hashes;
+        // Apply cost penalties to the queue according to structural uniqueness at the root level
+        /*
+        std::map<uint64_t, int> hashes;
+        for (int depth = 1; depth < 1; depth++) {
+            hashes.clear();
+            while (!pending.empty()) {
+                auto state = pending.top();
+                pending.pop();
+                uint64_t h = state->structural_hash(depth);
+                state->cost *= (1 + hashes[h]);
+                hashes[h]++;
+                q.push(state);
+            }
+            q.swap(pending);
+        }
+        */
 
         int expanded = 0;
         while (expanded < beam_size && !pending.empty()) {
@@ -2753,33 +2851,34 @@ State optimal_schedule(FunctionDAG &dag,
             pending.pop();
 
             if (pending.size() > 1 && random_dropout()) {
+                debug(0) << "Dropping state\n";
                 continue;
             }
 
-            // Stratify the beam by decisions close to the root of the
-            // tree. We are more likely to need to backtrack on these.
-            /*
-            uint64_t h = state->structural_hash(depth);
-            if (hashes.count(h)) {
-                deferred.push(state);
-                if (pending.empty()) {
-                    // Haven't expanded beam_size states yet. Increase
-                    // structural comparison depth and reconsider
-                    // previously overlooked states.
-                    depth++;
-                    hashes.clear();
-                    pending.swap(deferred);
-                }
-                continue;
-            }
-            hashes.insert(h);
-            */
-
-            // All stages have been scheduled
             if (state->num_funcs_scheduled == (int)dag.nodes.size()) {
                 debug(0) << '\n';
+
+                /*
+                debug(0) << "Optimal state?\n";
+                state->dump();
+
+                debug(0) << "Rest of queue:\n";
+                while (!pending.empty()) {
+                    pending.top()->calculate_cost(dag, params, nullptr, true);
+                    pending.top()->dump();
+                    pending.pop();
+                }
+                */
+
                 return *state;
             }
+
+            /*
+            if (expanded + 20 >= beam_size) {
+                debug(0) << "\n\n**** End of beam: (" << expanded << "):\n";
+                state->dump();
+            }
+            */
 
             /*
               debug(0) << "Expanding state:";
@@ -2787,7 +2886,7 @@ State optimal_schedule(FunctionDAG &dag,
               state->calculate_cost(dag, params, nullptr, true);
             */
 
-            state->generate_children(dag, params, throughput_predictor, enqueue_new_children);
+            state->generate_children(dag, params, constraints, throughput_predictor, enqueue_new_children);
             expanded++;
         }
 
@@ -2806,6 +2905,43 @@ State optimal_schedule(FunctionDAG &dag,
 
         // TODO(mgharbi): reset troughput predictor id?
     }
+}
+
+State optimal_schedule(FunctionDAG &dag,
+                       vector<Function> outputs,
+                       const MachineParams &params,
+                       ThroughputPredictor *throughput_predictor,
+                       int beam_size) {
+    FinePassConstraints fine;
+    CoarsePassConstraints coarse(params);
+    auto coarse_pass = optimal_schedule_pass(dag, outputs, params, &coarse, throughput_predictor, beam_size);
+
+    debug(0) << "\nCoarse pass result:\n";
+    coarse_pass.dump();
+
+    // Respect which things were compute_root and which axes of those were parallelized for the fine pass
+    debug(0) << "Deriving constraints from coarse pass:\n";
+    for (auto c : coarse_pass.root.children) {
+        fine.roots.insert(c->node);
+        debug(0) << ' ' << c->node->func.name() << " is compute_root\n";
+        int parallel_dim = -1;
+        for (int d = 0; d < (int)(c->size.size()); d++) {
+            if (c->size[d] >= params.parallelism) {
+                parallel_dim = d;
+            }
+        }
+        if (parallel_dim >= 0) {
+            debug(0) << " dimension " << parallel_dim << " of " << c->node->func.name() << " stage " << c->stage_idx << " is parallel\n";
+            fine.parallel_dims[c->stage] = parallel_dim;
+        }
+    }
+
+    auto fine_pass = optimal_schedule_pass(dag, outputs, params, &fine, throughput_predictor, beam_size);
+
+    // It's not necessarily true that the fine_pass, with its larger
+    // branching factor, ends up at a lower total cost than the coarse
+    // pass.
+    return coarse_pass.cost < fine_pass.cost ? coarse_pass : fine_pass;
 }
 
 }
@@ -2915,12 +3051,85 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
         json_file << jdata << std::endl;
         // json_file << std::setw(2) << jdata << std::endl;
     }
-
     if(throughput_predictor) {
       delete throughput_predictor;
     }
     return "";
 }
+
+//void test_convnet_correctness() {
+    //int n = 1;
+    //int stages = 10;
+
+    //Halide::Buffer<float> pipeline_features;
+    //Halide::Buffer<float> schedule_features;
+    //double cost;
+
+    //auto w = AutoScheduleModel::load_weights();
+    //auto stats = AutoScheduleModel::load_stats();
+
+    //ThroughputPredictorPipeline throughput_predictor(w, stats);
+
+    //throughput_predictor.enqueue(10, &pipeline_features, &schedule_features, &cost);
+
+    //std::default_random_engine generator;
+    //std::normal_distribution<float> distribution(0.0,1.0);
+    //for (int i = 0; i < n; i++) {
+        //for (int j = 0; j < 56; j++) {
+            //for (int k = 0; k < 7; k++) {
+                //for (int l = 0; l < stages; l++) {
+                    //float val = distribution(generator);
+                    //pipeline_features(i, j, k, l) = val;
+                //}
+            //}
+        //}
+    //}
+
+    //for (int i = 0; i < n; i++) {
+        //for (int j = 0; j < 25; j++) {
+            //for (int k = 0; k < stages; k++) {
+                //float val = distribution(generator);
+                //schedule_features(i, j, k) = val;
+            //}
+        //}
+    //}
+
+    //FILE *fpipe = fopen("/private/home/karimacma/Halide/pipeline.data", "ab");
+    //for (int i = 0; i < n; i++) {
+        //for (int j = 0; j < 56; j++) {
+            //for (int k = 0; k < 7; k++) {
+                //for (int l = 0; l < stages; l++) {
+                    //fwrite(&(pipeline_features(i, j, k, l)), sizeof(float), 1, fpipe);
+                //}
+            //}
+        //}
+    //}
+    //fclose(fpipe);
+
+    //FILE *fsched = fopen("/private/home/karimacma/Halide/schedule.data", "ab");
+    //for (int i = 0; i < n; i++) {
+        //for (int j = 0; j < 25; j++) {
+            //for (int k = 0; k < stages; k++) {
+                //fwrite(&(schedule_features(i,j,k)), sizeof(float), 1, fsched);
+            //}
+        //}
+    //}
+
+    //throughput_predictor.evaluate_costs();
+
+    //FILE *fpred = fopen("/private/home/karimacma/Halide/prediction.data", "ab");
+    //for (int i = 0; i < n; i++) {
+        //float c = cost;
+        //fwrite(&c, sizeof(float), 1, fpred);
+    //}
+    //fclose(fpred);
+
+    //FILE *fstages = fopen("/private/home/karimacma/Halide/stages.data", "ab");
+    //fwrite(&stages, sizeof(int), 1, fstages);
+
+    //fwrite(&n, sizeof(int), 1, fstages);
+    //fclose(fstages);
+//}
 
 //void test_convnet_correctness() {
     //int n = 1;
@@ -3008,67 +3217,6 @@ void autoschedule_test() {
     //Stats stats = load_stats();
 
     //ThroughputPredictorPipeline throughput_predictor(w, stats);
-
-    //Var x("x"), y("y");
-
-    //{
-        //// In a point-wise pipeline, everything should be fully fused.
-        //Func f("f"), g("g"), h("h");
-        //f(x, y) = (x + y) * (x + y);
-        //g(x, y) = f(x, y) * 2 + 1;
-        //h(x, y) = g(x, y) * 2 + 1;
-
-        //h.estimate(x, 0, 1000).estimate(y, 0, 1000);
-
-        //vector<Function> outputs = {h.function()};
-        //FunctionDAG dag(outputs, params, target);
-
-        //State optimal = optimal_schedule(dag, outputs, params, &throughput_predictor, beam_size);
-
-        //debug(0) << "** Optimal schedule:\n";
-        //optimal.calculate_cost(dag, params, &throughput_predictor, true);
-        //throughput_predictor.evaluate_costs();
-        //optimal.dump();
-        //debug(0) << '\n';
-
-        //optimal.apply_schedule(params);
-        //h.realize(1000, 1000);
-
-    //}
-
-    //{
-        //// In a pipeline with huge expensive stencils and low memory costs, nothing should be fused
-        //Func f("f"), g("g"), h("h");
-        //f(x, y) = (x + y) * (x + 2*y) * (x + 3*y) * (x + 4*y) * (x + 5*y);
-        //Expr e = 0;
-        //for (int i = 0; i < 100; i++) {
-            //e += f(x + i*10, y + i*10);
-        //}
-        //g(x, y) = e;
-        //e = 0;
-        //for (int i = 0; i < 100; i++) {
-            //e += g(x + i*10, y + i*10);
-        //}
-        //h(x, y) = e;
-
-        //h.estimate(x, 0, 1000).estimate(y, 0, 1000);
-
-        //MachineParams cheap_memory = params;
-        //cheap_memory.balance = 1;
-
-        //vector<Function> outputs = {h.function()};
-        //FunctionDAG dag(outputs, cheap_memory, target);
-        //State optimal = optimal_schedule(dag, outputs, cheap_memory, &throughput_predictor, beam_size);
-
-        //debug(0) << "** Optimal schedule:\n";
-        //optimal.calculate_cost(dag, params, &throughput_predictor, true);
-        //throughput_predictor.evaluate_costs();
-        //optimal.dump();
-        //debug(0) << '\n';
-
-        //optimal.apply_schedule(params);
-        //h.realize(1000, 1000);
-    //}
 
     //{
         //// In a pipeline with moderate isotropic stencils, there should be some square tiling
@@ -3287,6 +3435,35 @@ void autoschedule_test() {
         //vector<Function> outputs = {p3[N-1].function()};
         //FunctionDAG dag(outputs, params, target);
         //dag.dump();
+        //State optimal = optimal_schedule(dag, outputs, params, nullptr, 1); //&throughput_predictor, 1);
+
+        //debug(0) << "** Optimal schedule:\n";
+        //optimal.calculate_cost(dag, params, nullptr, true); //&throughput_predictor, true);
+        //throughput_predictor.evaluate_costs();
+        //optimal.dump();
+        //debug(0) << '\n';
+    //}
+
+    //{
+        //Func f_u8("f_u8");
+        //Func f_u64_1("f_u64_1");
+        //Func f_u64_2("f_u64_2");
+        //Buffer<uint8_t> a(1024 * 1024 + 2);
+
+        //Var x;
+        //f_u8(x) = (min(a(x) + 1, 17) * a(x+1) + a(x+2)) * a(x) * a(x) * a(x + 1) * a(x + 1);
+        //f_u64_1(x) = cast<uint64_t>(f_u8(x)) + 1;
+        //f_u64_2(x) = f_u64_1(x) * 3;
+
+        //// Ignoring the types, it would make sense to inline
+        //// everything into f_64_2 but this would vectorize fairly
+        //// narrowly, which is a waste of work for the first Func.
+
+        //f_u64_2.estimate(x, 0, 1024 * 1024);
+
+        //vector<Function> outputs = {f_u64_2.function()};
+        //FunctionDAG dag(outputs, params, target);
+        //dag.dump();
         //State optimal = optimal_schedule(dag, outputs, params, &throughput_predictor, 1);
 
         //debug(0) << "** Optimal schedule:\n";
@@ -3294,6 +3471,7 @@ void autoschedule_test() {
         //throughput_predictor.evaluate_costs();
         //optimal.dump();
         //debug(0) << '\n';
+
     //}
 
 }
