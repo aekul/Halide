@@ -1289,8 +1289,16 @@ struct PartialScheduleNode {
                 loops.back().parallel = true;
 
                 // Split and parallelize outer loop
-                if (parallelism[var_stage_key] < 0.125) {
-                    int task_size = std::floor(1 / parallelism[var_stage_key]);
+                auto p = parallelism[var_stage_key];
+                if (p < 0.125) {
+                    int task_size = 1;
+
+                    // At most 8 tasks per core
+                    while (p < 0.125) {
+                      p *= 2;
+                      task_size *= 2;
+                    }
+
                     LoopData old_outer_loop = loops.back();
                     loops.pop_back();
 
