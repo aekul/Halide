@@ -1,5 +1,6 @@
 #include "CSE.h"
 #include "ExprUsesVar.h"
+#include "LoopNest.h"
 #include "LoopNestFeaturizer.h"
 #include "Simplify.h"
 #include "Substitute.h"
@@ -12,16 +13,18 @@ using std::vector;
 LoopNestFeaturizer::LoopNestFeaturizer(
   Function &func
   , LoopNestPipelineFeatures &features
-  , const std::vector<std::pair<std::string, bool>>& loop_args
+  , const std::vector<const LoopNode*>& loops
   , LoopNestFeaturizer::Jacobian& store_jacobian
   , vector<std::pair<std::string, Jacobian>>& load_jacobians
 )
   : func{func}
   , features{features}
-  , loop_args{loop_args}
+  , loops{loops}
   , store_jacobian{store_jacobian}
   , load_jacobians{load_jacobians}
-{}
+{
+  internal_assert(loops.size() > 0);
+}
 
 int &LoopNestFeaturizer::op_bucket(LoopNestPipelineFeatures::OpType op_type, Type scalar_type) {
   int type_bucket = (int)classify_type(scalar_type);
@@ -228,15 +231,60 @@ LoopNestFeaturizer::DerivativeResult LoopNestFeaturizer::differentiate(const Exp
 LoopNestFeaturizer::Jacobian LoopNestFeaturizer::visit_memory_access(Type t, Expr arg, LoopNestPipelineFeatures::AccessType type) {
   // Compute matrix of partial derivatives of args w.r.t. loop params
   LoopNestFeaturizer::Jacobian j;
-  j.derivatives.resize(loop_args.size());
+  j.derivatives.resize(loops.size());
 
-  for (size_t i = 0; i < loop_args.size(); i++) {
+  bool is_strided = true;
+  bool is_vector = true;
+  std::vector<int> is_scalar;
+  bool is_pointwise = true;
+  //bool is_broadcast = false;
+  //bool is_slice = true;
+  bool is_constant = true;
+
+  int stride = 1;
+  for (size_t i = 0; i < loops.size(); i++) {
     arg = substitute(let_replacements, arg);
-    j.derivatives[i] = differentiate(arg, loop_args[i].first);
+    j.derivatives[i] = differentiate(arg, loops[i]->var_name);
+    auto deriv = j.derivatives[i];
+
+    is_pointwise &= deriv.is_whole_number() && (deriv.numerator / deriv.denominator) == stride;
+    stride *= loops[i]->extent;
+
+    // Loop arg is vectorized
+    if (loops[i]->vector_size > 1) {
+      is_vector &= deriv.is_one();
+    }
+
+    // Innermost loop
+    if (i == 0) {
+      is_strided &= deriv.is_small_integer();
+    }
+
+    is_scalar.push_back(deriv.is_zero());
+    is_constant &= deriv.is_zero();
+
+    //is_broadcast |= deriv.is_zero();
+    //is_slice &= deriv.is_one();
   }
 
-  j.scalar_type = classify_type(t);
+
+  auto type_class = classify_type(t);
+
+  bool is_gather_scatter = !is_vector && !is_strided && !is_scalar[0];
+
+  features.pointwise_accesses[(int)type][(int)type_class] += is_pointwise;
+  //features.transpose_accesses[(int)type][(int)type_class] += is_transpose;
+  //features.broadcast_accesses[(int)type][(int)type_class] += is_broadcast;
+  //features.slice_accesses[(int)type][(int)type_class] += is_slice;
+  features.vectorizable_accesses[(int)type][(int)type_class] += is_vector;
+  features.strided_accesses[(int)type][(int)type_class] += is_strided;
+  features.scalar_accesses[(int)type][(int)type_class] += is_scalar[0];
+  features.constant_accesses[(int)type][(int)type_class] += is_constant;
+  features.gather_scatter_accesses[(int)type][(int)type_class] += is_gather_scatter;
+
+  j.scalar_type = type_class;
   j.access_type = type;
+
   return j;
 }
 

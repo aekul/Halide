@@ -18,6 +18,8 @@ namespace Internal {
 using std::string;
 using std::vector;
 using std::map;
+
+struct LoopNode;
   
 struct LoopNestFeaturizer : public IRVisitor {
   using IRVisitor::visit;
@@ -46,6 +48,10 @@ struct LoopNestFeaturizer : public IRVisitor {
       int64_t g = gcd(numerator, denominator);
       numerator /= g;
       denominator /= g;
+    }
+
+    bool is_whole_number() const {
+      return exists && (numerator % denominator == 0);
     }
 
     bool is_one() const {
@@ -79,7 +85,7 @@ struct LoopNestFeaturizer : public IRVisitor {
   LoopNestFeaturizer(
     Function &func
     , LoopNestPipelineFeatures &features
-    , const std::vector<std::pair<std::string, bool>>& loop_args
+    , const std::vector<const LoopNode*>& loop_nodes
     , Jacobian& store_jacobian
     , vector<std::pair<std::string, Jacobian>>& load_jacobians
   );
@@ -122,7 +128,7 @@ struct LoopNestFeaturizer : public IRVisitor {
 private:
   Function &func;
   LoopNestPipelineFeatures &features;
-  const std::vector<std::pair<std::string, bool>>& loop_args; // from innermost outwards
+  const std::vector<const LoopNode*>& loops; // from innermost outwards
   Jacobian& store_jacobian;
   vector<std::pair<std::string, Jacobian>>& load_jacobians;
   map<std::string, Expr> let_replacements;

@@ -260,6 +260,32 @@ struct LoopNestPipelineFeatures {
         NumAccessTypes
     };
 
+    // Finer granularity call/store node properties. These are a
+    // function of the matrix of derivatives of each arg to a
+    // call w.r.t the loop variables of the Stage. Each row of
+    // the matrix corresponds to one of the call arguments. In
+    // each case we illustrate such a call, assuming that the
+    // variables of this Func are x, y, z, and that the
+    // dimension vectorized over is the first (x).
+    int pointwise_accesses[(int)AccessType::NumAccessTypes][(int)ScalarType::NumScalarTypes],  // Square identity matrix. f(x - 2, y + 8, z + param)
+        transpose_accesses[(int)AccessType::NumAccessTypes][(int)ScalarType::NumScalarTypes],         // Square permutation matrix. f(y + 1, z - 3, x)
+        broadcast_accesses[(int)AccessType::NumAccessTypes][(int)ScalarType::NumScalarTypes],         // Each row sums to 1. Each column sums to 1 or 0. f(y, x)
+        slice_accesses[(int)AccessType::NumAccessTypes][(int)ScalarType::NumScalarTypes],             // Each row sums to 1 or 0. Each column sums to 1. f(z, y, x, 4)
+        vectorizable_accesses[(int)AccessType::NumAccessTypes][(int)ScalarType::NumScalarTypes], // First (vectorized) col is 1, 0, 0, ... f(x+y, z*y, y/z)
+        strided_accesses[(int)AccessType::NumAccessTypes][(int)ScalarType::NumScalarTypes],      // First col is [(int)2,3,4], 0, 0, ...        f(3*x + 1, z/8, y/z)
+        scalar_accesses[(int)AccessType::NumAccessTypes][(int)ScalarType::NumScalarTypes],       // First col is all zero                  f(y, 2, z*8)
+        constant_accesses[(int)AccessType::NumAccessTypes][(int)ScalarType::NumScalarTypes],       
+        gather_scatter_accesses[(int)AccessType::NumAccessTypes][(int)ScalarType::NumScalarTypes];            // Not one of the three categories above  f(x, x, sqrt(y))
+
+    // TODO: We should possibly feed these Jacobians directly
+    // to the net rather than computing the properties above.
+
+    // TODO: strided captures downsamples. What about upsamples?
+
+    // TODO: It's weird that we've already selected a
+    // dimension to be vectorized over - that should be part
+    // of the scheduling search space instead.
+
     void dump() const {
         for (int i = 0; i < (int)ScalarType::NumScalarTypes; i++) {
             const char *type_names[] = {"Bool", "UInt8", "UInt16", "UInt32", "UInt64", "Float", "Double"};
@@ -292,7 +318,16 @@ struct LoopNestPipelineFeatures {
                      << "      FuncCall:   " << op_histogram[(int)OpType::FuncCall][i] << '\n'
                      << "      SelfCall:   " << op_histogram[(int)OpType::SelfCall][i] << '\n'
                      << "      ExternCall: " << op_histogram[(int)OpType::ExternCall][i] << '\n'
-                     << "      Let:        " << op_histogram[(int)OpType::Let][i] << '\n';
+                     << "      Let:        " << op_histogram[(int)OpType::Let][i] << '\n'
+                     << "     Memory access patterns. Columns are calls to other Funcs, self-calls, input image access, and stores\n"
+                     << "      Pointwise:      " << pointwise_accesses[0][i] << ' ' << pointwise_accesses[1][i] << ' ' << pointwise_accesses[2][i] << ' ' << pointwise_accesses[3][i] << '\n'
+                     << "      Transpose:      " << transpose_accesses[0][i] << ' ' << transpose_accesses[1][i] << ' ' << transpose_accesses[2][i] << ' ' << transpose_accesses[3][i] << '\n'
+                     << "      Broadcast:      " << broadcast_accesses[0][i] << ' ' << broadcast_accesses[1][i] << ' ' << broadcast_accesses[2][i] << ' ' << broadcast_accesses[3][i] << '\n'
+                     << "      Slice:          " << slice_accesses[0][i] << ' ' << slice_accesses[1][i] << ' ' << slice_accesses[2][i] << ' ' << slice_accesses[3][i] << '\n'
+                     << "      Vectorizable:   " << vectorizable_accesses[0][i] << ' ' << vectorizable_accesses[1][i] << ' ' << vectorizable_accesses[2][i] << ' ' << vectorizable_accesses[3][i] << '\n'
+                     << "      Strided:        " << strided_accesses[0][i] << ' ' << strided_accesses[1][i] << ' ' << strided_accesses[2][i] << ' ' << strided_accesses[3][i] << '\n'
+                     << "      Scalar:         " << scalar_accesses[0][i] << ' ' << scalar_accesses[1][i] << ' ' << scalar_accesses[2][i] << ' ' << scalar_accesses[3][i] << '\n'
+                     << "      Gather/Scatter: " << gather_scatter_accesses[0][i] << ' ' << gather_scatter_accesses[1][i] << ' ' << gather_scatter_accesses[2][i] << ' ' << gather_scatter_accesses[3][i] << '\n';
         }
     }
 
@@ -330,6 +365,59 @@ struct LoopNestPipelineFeatures {
             jhistogram["extern_call"] = op_histogram[(int)OpType::ExternCall][i];
             jhistogram["let"] = op_histogram[(int)OpType::Let][i];
             jtype["op_histogram"] = jhistogram;
+
+            // Memory access patterns. Columns are 
+            //  - calls to other Funcs,
+            //  - self-calls
+            //  - input image access
+            //  - and stores
+            json jmemory;
+            jmemory["pointwise"] = { 
+              pointwise_accesses[0][i],
+              pointwise_accesses[1][i],
+              pointwise_accesses[2][i],
+              pointwise_accesses[3][i] };
+            jmemory["transpose"] = { 
+              transpose_accesses[0][i],
+              transpose_accesses[1][i],
+              transpose_accesses[2][i],
+              transpose_accesses[3][i] };
+            jmemory["broadcast"] = { 
+              broadcast_accesses[0][i],
+              broadcast_accesses[1][i],
+              broadcast_accesses[2][i],
+              broadcast_accesses[3][i] };
+            jmemory["slice"] = { 
+              slice_accesses[0][i],
+              slice_accesses[1][i],
+              slice_accesses[2][i],
+              slice_accesses[3][i] };
+            jmemory["vectorizable"] = { 
+              vectorizable_accesses[0][i],
+              vectorizable_accesses[1][i],
+              vectorizable_accesses[2][i],
+              vectorizable_accesses[3][i] };
+            jmemory["strided"] = { 
+              strided_accesses[0][i],
+              strided_accesses[1][i],
+              strided_accesses[2][i],
+              strided_accesses[3][i] };
+            jmemory["scalar"] = { 
+              scalar_accesses[0][i],
+              scalar_accesses[1][i],
+              scalar_accesses[2][i],
+              scalar_accesses[3][i] };
+            jmemory["constant"] = { 
+              constant_accesses[0][i],
+              constant_accesses[1][i],
+              constant_accesses[2][i],
+              constant_accesses[3][i] };
+            jmemory["gather_scatter"] = { 
+              gather_scatter_accesses[0][i],
+              gather_scatter_accesses[1][i],
+              gather_scatter_accesses[2][i],
+              gather_scatter_accesses[3][i] };
+            jtype["memory_access_patterns"] = jmemory;
 
             jdata[type_names[i]] = jtype;
         } // Loop over types

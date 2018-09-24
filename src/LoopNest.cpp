@@ -56,18 +56,20 @@ json BlockNode::to_json() const {
   return jdata;
 }
 
-ComputeNode::ComputeNode(Function func, const Expr& arg, const std::vector<Expr>& values, const BlockNode* parent)
+ComputeNode::ComputeNode(Function func, const Expr& arg, const std::vector<Expr>& values, const BlockNode* parent, const ScheduleFeatures& schedule_features, const PipelineFeatures& pipeline_features)
   : func{func}
   , arg{arg}
   , values{values}
   , parent{parent}
+  , schedule_features{schedule_features}
+  , pipeline_features{pipeline_features}
 {
   featurize();
 }
 
 void ComputeNode::featurize() {
-  auto loop_vars = get_loop_stack();
-  LoopNestFeaturizer featurizer(func, features, loop_vars, store_jacobian, load_jacobians);
+  auto loops = get_loop_stack();
+  LoopNestFeaturizer featurizer(func, features, loops, store_jacobian, load_jacobians);
 
   memset(&features, 0, sizeof(features));
 
@@ -81,18 +83,17 @@ void ComputeNode::featurize() {
   v.accept(&featurizer);
 } 
 
-std::vector<std::pair<std::string, bool>> ComputeNode::get_loop_stack() const {
+std::vector<const LoopNode*> ComputeNode::get_loop_stack() const {
   const LoopNode* loop = parent->parent;
 
-  std::vector<std::pair<std::string, bool>> loop_vars;
+  std::vector<const LoopNode*> loops;
 
   while (loop) {
-    user_assert(loop->var.as<Variable>());
-    loop_vars.push_back({loop->var.as<Variable>()->name, loop->vector_size > 1});
+    loops.push_back(loop);
     loop = loop->parent->parent;
   }
 
-  return loop_vars;
+  return loops;
 }
 
 void ComputeNode::dump(int indent_level) const {
@@ -116,6 +117,7 @@ json ComputeNode::to_json() const {
   jdata["type"] = "compute";
   jdata["name"] = func.name();
   jdata["pipeline_features"] = features.json_dump();
+  jdata["schedule_features"] = schedule_features.json_dump();
   jdata["store_jacobian"] = store_jacobian.to_json();
   for (const auto& j : load_jacobians) {
     jdata["load_jacobians"].push_back({
@@ -140,7 +142,8 @@ std::string LoopNode::MakeVarName(Function f, int var_index, int stage_index, in
 
 LoopNode::LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel)
   : func{f}
-  , var{Variable::make(Int(32), MakeVarName(f, var_index, stage_index, vector_size, depth))}
+  , var_name{MakeVarName(f, var_index, stage_index, vector_size, depth)}
+  , var{Variable::make(Int(32), var_name)}
   , var_index{var_index}
   , stage_index{stage_index}
   , extent{extent}
