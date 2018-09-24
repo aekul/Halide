@@ -2445,7 +2445,7 @@ struct State {
             //throughput_predictor->enqueue(jdata, &cost);
         } else {
             // We have no throughput predictor.
-            for (auto p : features) {
+            for (auto& p : features) {
                 for (size_t s = 0; s < p.second.size(); s++) {
                     auto &feat = p.second[s];
                     // Reject silly schedules. They're not even useful for
