@@ -1188,7 +1188,7 @@ struct PartialScheduleNode {
                 loops.back().parallel = true;
 
                 // Split and parallelize outer loop
-                if (p < 1) {
+                if (p <= 1) {
                     int task_size = 1;
 
                     // At most 128 tasks per core
