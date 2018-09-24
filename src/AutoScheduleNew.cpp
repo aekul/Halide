@@ -2345,14 +2345,6 @@ struct State {
         root.get_compute_sites(compute_site, store_site);
         root.compute_features(params, compute_site, store_site, 1, 1, nullptr, root, nullptr, &features);
 
-        std::unique_ptr<BlockNode> block = make_unique<BlockNode>();
-        std::map<std::string, Expr> store_at_bounds;
-        std::map<std::string, Expr> compute_bounds;
-        std::map<std::string, int> strides;
-        std::map<std::string, double> parallelism;
-        root.create_loop_nest(dag, params, nullptr, 0, 0, block.get(), store_at_bounds, compute_bounds, strides, parallelism, params.parallelism, features);
-        json jdata = block->to_json();
-
         //for (const auto &n : dag.nodes) {
             //const auto &sched_feat = features[&n];
             //if (sched_feat.size() < n.stages.size()) {
@@ -2455,18 +2447,13 @@ struct State {
             // We have no throughput predictor.
             for (auto p : features) {
                 for (size_t s = 0; s < p.second.size(); s++) {
-                    const auto &feat = p.second[s];
+                    auto &feat = p.second[s];
                     // Reject silly schedules. They're not even useful for
                     // training data, as they potentially take the age of
                     // the universe to benchmark. We define 'silly' as
                     // doing more than 10x redundant recompute for any one
                     // stage.
                     //if (feat.points_computed_total + feat.inlined_calls > 10*feat.points_computed_minimum) return false;
-
-                    if (verbose) {
-                        debug(0) << "Schedule features for " << p.first->func.name() << " stage " << s << "\n";
-                        feat.dump();
-                    }
 
                     auto &stage = p.first->stages[s];
                     double compute_cost = 0;
@@ -2486,6 +2473,7 @@ struct State {
                     }
                     */
                     compute_cost = per_element_compute_cost * feat.points_computed_total;
+                    feat.total_element_compute_cost = compute_cost;
 
                     // Figure out vector overcompute
                     const int native_vector_size = feat.native_vector_size;
@@ -2499,7 +2487,10 @@ struct State {
                     const double compute_cost_inlined = per_element_compute_cost_inlined * feat.inlined_calls;
                     compute_cost += compute_cost_inlined;
 
+                    feat.compute_cost_inlined = compute_cost_inlined;
+
                     compute_cost *= idle_simd_lanes * vector_recompute;
+                    feat.vector_overcompute_factor = idle_simd_lanes * vector_recompute;
 
                     if (verbose) {
                         debug(0) << "idle_simd_lanes = " << idle_simd_lanes << "\n";
@@ -2542,6 +2533,7 @@ struct State {
                         // takes about the same amount of time as 16
                         // tasks.
                         idle_core_wastage *= std::ceil(num_tasks / num_cores) * (num_cores / num_tasks);
+                        feat.idle_core_wastage = idle_core_wastage;
 
                         compute_cost *= idle_core_wastage;
 
@@ -2563,6 +2555,9 @@ struct State {
                     }
 
                     double memory_load_cost = cache_misses * cost_of_miss;
+                    feat.load_cache_misses = cache_misses;
+                    feat.load_cost_of_miss = cost_of_miss;
+                    feat.memory_load_cost = memory_load_cost;
 
                     cache_misses = cost_of_miss = 0;
                     if (feat.inlined_calls == 0) {
@@ -2575,18 +2570,25 @@ struct State {
                     }
 
                     double memory_store_cost = cache_misses * cost_of_miss;
+                    feat.store_cache_misses = cache_misses;
+                    feat.store_cost_of_miss = cost_of_miss;
+                    feat.memory_store_cost = memory_store_cost;
 
                     // Penalize writing partial cache lines. Assume a cache line is two simd vectors.
                     const double native_cache_line_size = native_vector_size * 2;
                     const double cache_line_wastage = std::max(1.0, native_cache_line_size / feat.innermost_pure_loop_extent);
                     memory_store_cost *= cache_line_wastage;
+                    feat.cache_line_wastage = cache_line_wastage;
+                    feat.memory_store_cost *= cache_line_wastage;
 
                     // Malloc aint free. Small allocations should go on the stack, but this isn't totally reliable.
                     double cost_of_mallocs = feat.num_realizations * 1e2;
+                    feat.cost_of_mallocs = cost_of_mallocs;
 
                     // Penalize working sets that start to fall out of cache
                     double ws = 1e-6 * feat.working_set;
                     double cost_of_working_set = ws * ws * ws * params.balance * feat.num_realizations;
+                    feat.cost_of_working_set = cost_of_working_set;
 
                     if (verbose) {
                         debug(0) << "Cost model for " << p.first->func.name()
@@ -2598,13 +2600,30 @@ struct State {
                                  << cost_of_working_set << '\n';
                     }
 
+                    feat.compute_cost = compute_cost;
                     cost += compute_cost + memory_load_cost + memory_store_cost + cost_of_mallocs + cost_of_working_set;
+                    feat.total_cost = compute_cost + memory_load_cost + memory_store_cost + cost_of_mallocs + cost_of_working_set;
+
+                    if (verbose) {
+                        debug(0) << "Schedule features for " << p.first->func.name() << " stage " << s << "\n";
+                        feat.dump();
+                    }
                 }
             }
         }
+
+        std::unique_ptr<BlockNode> block = make_unique<BlockNode>();
+        std::map<std::string, Expr> store_at_bounds;
+        std::map<std::string, Expr> compute_bounds;
+        std::map<std::string, int> strides;
+        std::map<std::string, double> parallelism;
+        root.create_loop_nest(dag, params, nullptr, 0, 0, block.get(), store_at_bounds, compute_bounds, strides, parallelism, params.parallelism, features);
+        json jdata = block->to_json();
+
         if (json_dump) {
           (*json_dump)["features"] = jdata;
         }
+
         cost_calculations++;
         return true;
     }

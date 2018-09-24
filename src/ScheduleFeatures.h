@@ -54,6 +54,23 @@ struct ScheduleFeatures {
 
     int native_vector_size; // The native vector size for the narrowest type used.
 
+
+    int64_t total_element_compute_cost = 0;
+    int64_t compute_cost_inlined = 0;
+    double vector_overcompute_factor = 0;
+    double idle_core_wastage = 0;
+    double load_cache_misses = 0;
+    double load_cost_of_miss = 0;
+    double memory_load_cost = 0;
+    double store_cache_misses = 0;
+    double store_cost_of_miss = 0;
+    double memory_store_cost = 0;
+    double cache_line_wastage = 0;
+    double cost_of_mallocs = 0;
+    double cost_of_working_set = 0;
+    double compute_cost = 0;
+    double total_cost = 0;
+
     void dump() const {
         debug(0) << "    num_realizations:                      " << num_realizations << '\n'
                  << "    num_productions:                       " << num_productions << '\n'
@@ -79,7 +96,22 @@ struct ScheduleFeatures {
                  << "    working_set:                           " << working_set << '\n'
                  << "    vector_size:                           " << vector_size << '\n'
                  << "    rounded_innermost_pure_loop_extent     " << rounded_innermost_pure_loop_extent << '\n'
-                 << "    native_vector_size:                    " << vector_size << '\n';
+                 << "    native_vector_size:                    " << vector_size << '\n'
+                 << "    total_element_compute_cost:            " << total_element_compute_cost << '\n'
+                 << "    compute_cost_inlined:                  " << compute_cost_inlined << '\n'
+                 << "    vector_overcompute_factor:             " << vector_overcompute_factor << '\n'
+                 << "    idle_core_wastage:                     " << idle_core_wastage << '\n'
+                 << "    load_cache_misses:                     " << load_cache_misses << '\n'
+                 << "    load_cost_of_miss:                     " << load_cost_of_miss << '\n'
+                 << "    memory_load_cost:                      " << memory_load_cost << '\n'
+                 << "    store_cache_misses:                    " << store_cache_misses << '\n'
+                 << "    store_cost_of_miss:                    " << store_cost_of_miss << '\n'
+                 << "    memory_store_cost:                     " << memory_store_cost << '\n'
+                 << "    cache_line_wastage:                    " << cache_line_wastage << '\n'
+                 << "    cost_of_mallocs:                       " << cost_of_mallocs << '\n'
+                 << "    cost_of_working_set:                   " << cost_of_working_set << '\n'
+                 << "    compute_cost:                          " << compute_cost << '\n'
+                 << "    total_cost:                            " << total_cost << '\n';
     }
 
     json json_dump(bool as_vector=true) const {
@@ -110,7 +142,22 @@ struct ScheduleFeatures {
                 working_set,
                 vector_size,
                 rounded_innermost_pure_loop_extent,
-                native_vector_size
+                native_vector_size,
+                total_element_compute_cost,
+                compute_cost_inlined, 
+                vector_overcompute_factor,
+                idle_core_wastage,
+                load_cache_misses,
+                load_cost_of_miss,
+                memory_load_cost,
+                store_cache_misses,
+                store_cost_of_miss,
+                memory_store_cost,
+                cache_line_wastage,
+                cost_of_mallocs,
+                cost_of_working_set,
+                compute_cost,
+                total_cost
             };
         } else {
             jdata["num_realizations"]                      = num_realizations;
@@ -138,6 +185,21 @@ struct ScheduleFeatures {
             jdata["vector_size"]                           = vector_size;
             jdata["rounded_innermost_pure_loop_extent"]    = rounded_innermost_pure_loop_extent;
             jdata["native_vector_size"]                    = native_vector_size;
+            jdata["total_element_compute_cost"] = total_element_compute_cost;
+            jdata["compute_cost_inlined"] = compute_cost_inlined;
+            jdata["vector_overcompute_factor"] = vector_overcompute_factor;
+            jdata["idle_core_wastage"] = idle_core_wastage;
+            jdata["load_cache_misses"] = load_cache_misses;
+            jdata["load_cost_of_miss"] = load_cost_of_miss;
+            jdata["memory_load_cost"] = memory_load_cost;
+            jdata["store_cache_misses"] = store_cache_misses;
+            jdata["store_cost_of_miss"] = store_cost_of_miss;
+            jdata["memory_store_cost"] = memory_store_cost;
+            jdata["cache_line_wastage"] = cache_line_wastage;
+            jdata["cost_of_mallocs"] = cost_of_mallocs;
+            jdata["cost_of_working_set"] = cost_of_working_set;
+            jdata["compute_cost"] = compute_cost;
+            jdata["total_cost"] = total_cost;
         }
         return jdata;
     }
