@@ -1183,17 +1183,18 @@ struct PartialScheduleNode {
 
             if (parallelism[var_stage_key] > 1) {
                 parallelism[var_stage_key] /= loops.back().outer_extent;
+
+                auto p = parallelism[var_stage_key];
                 loops.back().parallel = true;
 
                 // Split and parallelize outer loop
-                auto p = parallelism[var_stage_key];
-                if (p < 0.125) {
+                if (p < 1) {
                     int task_size = 1;
 
-                    // At most 8 tasks per core
-                    while (p < 0.125) {
-                      p *= 2;
-                      task_size *= 2;
+                    // At most 128 tasks per core
+                    while (p < 1.0 / 128) {
+                        p *= 2;
+                        task_size *= 2;
                     }
 
                     LoopData old_outer_loop = loops.back();
