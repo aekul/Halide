@@ -116,7 +116,8 @@ json ComputeNode::to_json() const {
   json jdata;
   jdata["type"] = "compute";
   jdata["name"] = func.name();
-  jdata["pipeline_features"] = features.json_dump();
+  jdata["loop_nest_pipeline_features"] = features.json_dump();
+  jdata["pipeline_features"] = pipeline_features.json_dump();
   jdata["schedule_features"] = schedule_features.json_dump();
   jdata["store_jacobian"] = store_jacobian.to_json();
   for (const auto& j : load_jacobians) {
