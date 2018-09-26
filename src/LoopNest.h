@@ -33,6 +33,7 @@ struct AllocNode : LoopLevelNode {
   std::string name;
   int64_t size;
   int bytes_per_point;
+  bool should_store_on_stack;
   std::vector<int64_t> region;
   const BlockNode* parent = nullptr;
 

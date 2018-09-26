@@ -1084,11 +1084,31 @@ struct PartialScheduleNode {
         return tail_strategy;
     }
 
+    bool should_store_on_stack(const PartialScheduleNode *parent, int depth) const {
+        const auto &parent_bounds = parent->get_bounds(node);
+        if (stage_idx == 0 && parent->node != node) {
+            // Pick a memory type
+            double bytes = node->bytes_per_point;
+            for (const auto &p : parent_bounds.region_computed) {
+                bytes *= p.second - p.first + 1;
+            }
+            if (bytes < 64000 && depth > 2) {
+                // If it's probably a small allocation, and it's
+                // made more than once, use stack-scoped
+                // storage. Otherwise let the compiler pick heap
+                // or stack as it likes.
+                return true;
+            }
+        }
+        return false;
+    }
+
     void create_loop_nest(const FunctionDAG &dag,
                           const MachineParams &params,
                           const PartialScheduleNode *parent,
                           int indent_level,
                           int depth,
+                          int node_depth,
                           BlockNode* block,
                           std::map<std::string, Expr> store_at_bounds,
                           std::map<std::string, Expr> compute_bounds,
@@ -1254,6 +1274,7 @@ struct PartialScheduleNode {
             alloc->name = name;
             alloc->bytes_per_point = f->bytes_per_point;
             alloc->size = 1;
+            alloc->should_store_on_stack = should_store_on_stack(parent, node_depth);
             int stride = 1;
             // get_uncached_bounds if the bounds of this func have not yet been
             // computed (this typically happens for funcs that have not been
@@ -1306,7 +1327,7 @@ struct PartialScheduleNode {
         } 
 
         for (int i = children.size() - 1; i >= 0; i--) {
-            children[i]->create_loop_nest(dag, params, this, indent_level, depth + 1, block, store_at_bounds, compute_bounds, strides, parallelism, num_cores, features);
+            children[i]->create_loop_nest(dag, params, this, indent_level, depth + 1, node_depth + 1, block, store_at_bounds, compute_bounds, strides, parallelism, num_cores, features);
         }
 
         if (innermost) {
@@ -2655,7 +2676,7 @@ struct State {
         std::map<std::string, Expr> compute_bounds;
         std::map<std::string, int> strides;
         std::map<std::string, double> parallelism;
-        root.create_loop_nest(dag, params, nullptr, 0, 0, block.get(), store_at_bounds, compute_bounds, strides, parallelism, params.parallelism, features);
+        root.create_loop_nest(dag, params, nullptr, 0, 0, 0, block.get(), store_at_bounds, compute_bounds, strides, parallelism, params.parallelism, features);
         json jdata = block->to_json();
 
         if (json_dump) {

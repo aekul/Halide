@@ -28,6 +28,7 @@ json AllocNode::to_json() const {
   jdata["size"] = size;
   jdata["region"] = region;
   jdata["bytes_per_point"] = bytes_per_point;
+  jdata["should_store_on_stack"] = should_store_on_stack;
   return jdata;
 }
 
