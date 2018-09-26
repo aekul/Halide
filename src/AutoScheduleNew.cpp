@@ -1088,6 +1088,10 @@ struct PartialScheduleNode {
     }
 
     bool should_store_on_stack(const PartialScheduleNode *parent, int depth) const {
+        if (is_root()) {
+            return false;
+        }
+
         const auto &parent_bounds = parent->get_bounds(node);
         if (stage_idx == 0 && parent->node != node) {
             // Pick a memory type
@@ -1194,7 +1198,7 @@ struct PartialScheduleNode {
 
             // From inner loops outward
             std::vector<LoopData> loops;
-            int inner_extent = bounds[node].loops[stage_idx][i].second - bounds[node].loops[stage_idx][i].first + 1;
+            int inner_extent = bounds[node]->loops[stage_idx][i].second - bounds[node]->loops[stage_idx][i].first + 1;
             loops.emplace_back(size[i], inner_extent);
 
             int vector_size = 1;
@@ -1711,7 +1715,7 @@ struct PartialScheduleNode {
             return *(it->second);
         }
 
-        return set_bounds(f, std::move(get_uncached_bounds(f, ignore_outside_consumers)));
+        return set_bounds(f, get_uncached_bounds(f, ignore_outside_consumers));
     }
 
     Bound get_uncached_bounds(const FunctionDAG::Node *f, bool ignore_outside_consumers = true) const {
