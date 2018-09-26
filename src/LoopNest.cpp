@@ -141,7 +141,7 @@ std::string LoopNode::MakeVarName(Function f, int var_index, int stage_index, in
   return var_name.str();
 }
 
-LoopNode::LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel)
+LoopNode::LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy)
   : func{f}
   , var_name{MakeVarName(f, var_index, stage_index, vector_size, depth)}
   , var{Variable::make(Int(32), var_name)}
@@ -152,6 +152,7 @@ LoopNode::LoopNode(Function f, int var_index, int stage_index, int64_t extent, i
   , parent{parent}
   , parallel{parallel}
   , body{make_unique<BlockNode>()}
+  , tail_strategy{tail_strategy}
 {
   body->parent = this;
 }
@@ -178,6 +179,10 @@ json LoopNode::to_json() const {
   jdata["vector_size"] = vector_size;
   jdata["parallel"] = parallel;
   jdata["block"] = body->to_json();
+  jdata["is_round_up"] = tail_strategy == TailStrategy::RoundUp;
+  jdata["is_guard_with_if"] = tail_strategy == TailStrategy::GuardWithIf;
+  jdata["is_shiftinwards"] = tail_strategy == TailStrategy::ShiftInwards;
+  jdata["is_auto"] = tail_strategy == TailStrategy::Auto;
   return jdata;
 }
 

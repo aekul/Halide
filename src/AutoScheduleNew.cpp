@@ -1064,6 +1064,26 @@ struct PartialScheduleNode {
         return var_base_name(f.name(), var_index);
     };
 
+    TailStrategy select_tail_strategy() const {
+        // Pick a tail strategy for any splits
+        auto tail_strategy = TailStrategy::Auto;
+        if (stage_idx == 0 && !accesses_input_buffer() && !node->is_output) {
+            // Roundup is lowest overhead, provided it doesn't
+            // expand the bounds read on the input or written on
+            // the output. However, you can only really use it on
+            // pure stages that don't access the input anywhere in
+            // their loop nest.
+            tail_strategy = TailStrategy::RoundUp;
+        } else if (stage_idx > 0) {
+            // update stages use guardwithif
+            tail_strategy = TailStrategy::GuardWithIf;
+        } else {
+            // Pure stages that access the input use shiftinwards
+            tail_strategy = TailStrategy::ShiftInwards;
+        }
+        return tail_strategy;
+    }
+
     void create_loop_nest(const FunctionDAG &dag,
                           const MachineParams &params,
                           const PartialScheduleNode *parent,
@@ -1134,6 +1154,7 @@ struct PartialScheduleNode {
                     , block
                     , depth
                     , l.parallel
+                    , select_tail_strategy()
                 );
 
                 std::string key = var_base_name(node->func, i);
