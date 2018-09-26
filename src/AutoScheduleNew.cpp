@@ -183,6 +183,8 @@ struct FunctionDAG {
             node_data["stages"] = jstages;
             return node_data;
         }
+
+        bool is_output;
     };
 
     struct Edge {
@@ -417,6 +419,11 @@ struct FunctionDAG {
                     node.vector_size = stage.vector_size;
                 } else {
                     node.vector_size = std::max(node.vector_size, stage.vector_size);
+                }
+
+                node.is_output = false;
+                for (const auto &o : outputs) {
+                    node.is_output |= o.same_as(node.func);
                 }
 
                 node.stages.emplace_back(std::move(stage));
@@ -874,7 +881,7 @@ vector<vector<int64_t>> generate_tilings(const vector<int64_t> &s, int d, int fa
 }
 
 struct Constraints {
-    virtual bool must_root(const FunctionDAG::Node *node) const { return false; }
+    virtual bool must_root(const FunctionDAG::Node *node) const { return node->is_output; }
     virtual bool may_root(const FunctionDAG::Node *node) const { return true; }
     virtual bool must_inline(const FunctionDAG::Node *node) const { return false; }
     virtual bool may_inline(const FunctionDAG::Node *node) const { return true; }
@@ -898,7 +905,7 @@ struct FinePassConstraints : public Constraints {
     map<const FunctionDAG::Node::Stage *, uint64_t> parallel_dims;
 
     bool must_root(const FunctionDAG::Node *node) const override {
-        return roots.find(node) != roots.end();
+        return node->is_output || (roots.find(node) != roots.end());
     }
 
     bool may_root(const FunctionDAG::Node *node) const override {
@@ -1643,12 +1650,6 @@ struct PartialScheduleNode {
         vector<pair<int64_t, int64_t>> region_required, region_computed;
         vector<vector<pair<int64_t, int64_t>>> loops;
         vector<pair<Expr, Expr>> region_required_symbolic, region_computed_symbolic;
-
-        // The number of points in the iteration domain. Sum over the
-        // products of the loops. Outside the realization of the Func
-        // it's the minimum number of iteration domain points to
-        // compute the required region. Inside it's the actual.
-        int64_t iteration_domain_points;
     };
 
     // The total bounds required of the given Func for one representative iteration of this loop. Computed lazily and cached.
@@ -1660,17 +1661,17 @@ struct PartialScheduleNode {
             return it->second;
         }
 
-        bounds[f] = get_uncached_bounds(f, ignore_outside_consumers);
-        return bounds[f];
+        auto p = bounds.emplace(f, get_uncached_bounds(f, ignore_outside_consumers));
+        return p.first->second;
     }
 
     Bound get_uncached_bounds(const FunctionDAG::Node *f, bool ignore_outside_consumers = true) const {
         Bound bound;
         // Compute the region required
-        if (f->outgoing_edges.empty() && is_root()) {
+        if (f->is_output && is_root()) {
+            internal_assert(f->outgoing_edges.empty()) << "Outputs that access other outputs not yet supported\n";
             // It's an output.
             // Use the bounds estimate
-            bound.iteration_domain_points = 1;
             map<string, pair<int64_t, int64_t>> estimates;
             for (auto b : f->func.schedule().estimates()) {
                 int64_t i_min = *as_const_int(b.min);
@@ -1682,7 +1683,6 @@ struct PartialScheduleNode {
                 auto it = estimates.find(f->func.args()[i]);
                 user_assert(it != estimates.end())
                     << "Need an estimate on dimension " << i << " of \"" << f->func.name() << "\"";
-                bound.iteration_domain_points *= it->second.second - it->second.first + 1;
                 bound.region_required.push_back(it->second);
                 bound.region_required_symbolic.push_back({
                     IntImm::make(Int(32), it->second.first)
@@ -1787,7 +1787,6 @@ struct PartialScheduleNode {
             computed_map[f->region_required[i].min.as<Variable>()->name] = (int)(*imin);
             computed_map[f->region_required[i].max.as<Variable>()->name] = (int)(*imax);
         }
-        bound.iteration_domain_points = 0;
         for (const auto &s : f->stages) {
             vector<pair<int64_t, int64_t>> loop;
             int64_t prod = 1;
@@ -1800,7 +1799,6 @@ struct PartialScheduleNode {
                 loop.push_back({*imin, *imax});
                 prod *= (*imax) - (*imin) + 1;
             }
-            bound.iteration_domain_points += prod;
             bound.loops.emplace_back(std::move(loop));
         }
         return bound;
@@ -1854,6 +1852,28 @@ struct PartialScheduleNode {
             if (it != inlined.end()) {
                 return true;
             }
+        }
+        return false;
+    }
+
+    bool accesses_input_buffer() const {
+        for (const auto &c : children) {
+            if (c->accesses_input_buffer()) return true;
+        }
+        if (is_root()) return false;
+
+        auto check = [&](const FunctionDAG::Node *n) {
+            for (const auto &s : node->stages) {
+                for (int t = 0; t < (int)PipelineFeatures::ScalarType::NumScalarTypes; t++) {
+                    if (s.features.op_histogram[(int)PipelineFeatures::OpType::ImageCall][t] > 0) return true;
+                }
+            }
+            return false;
+        };
+
+        if (check(node)) return true;
+        for (auto p : inlined) {
+            if (check(p.first)) return true;
         }
         return false;
     }
@@ -1913,7 +1933,6 @@ struct PartialScheduleNode {
             node->tileable = tileable;
             Bound single_point;
             single_point.loops.resize(f->stages.size());
-            single_point.iteration_domain_points = 1;
             for (const auto &l : bounds.loops[s]) {
                 // Initialize the loop nest
                 node->size.push_back(l.second - l.first + 1);
@@ -1923,7 +1942,7 @@ struct PartialScheduleNode {
                 single_point.loops[s].push_back({l.first, l.first});
             }
             // Leave region required blank inside the computation of a Func
-            node->bounds[f] = single_point;
+            node->bounds.emplace(f, std::move(single_point));
             children.emplace_back(std::move(node));
         }
     }
@@ -1938,15 +1957,6 @@ struct PartialScheduleNode {
         internal_assert(constraints);
 
         vector<PartialScheduleNode> result;
-
-        // Is it worth descending into this loop? If we don't end up doing less work, it's pointless.
-        if (false && parent) {
-            int64_t parent_points = parent->get_bounds(f).iteration_domain_points;
-            int64_t in_loop_points = get_bounds(f).iteration_domain_points;
-            if (parent_points <= in_loop_points) {
-                return result;
-            }
-        }
 
         // Figure out which child we can fuse this into
         int child = -1;
@@ -1982,7 +1992,7 @@ struct PartialScheduleNode {
             result.emplace_back(std::move(r));
         }
 
-        if (f->outgoing_edges.empty() || constraints->must_root(f)) {
+        if (f->is_output || constraints->must_root(f)) {
             // Not permitted to compute at tiles of some consumer
             return result;
         }
@@ -2052,13 +2062,13 @@ struct PartialScheduleNode {
                 std::swap(inner->bounds, outer.bounds);
                 std::swap(inner->store_at, outer.store_at);
 
-                outer.bounds[node] = inner->bounds[node];
+                Bound b = inner->bounds[node];
+                // outer.bounds.emplace(node, inner->bounds[node]);
                 outer.innermost = false;
                 outer.tileable &= constraints->may_subtile();
 
                 // Then move factors from the outer loop to the inner loop
                 auto parent_bounds = parent->get_bounds(node);
-                auto &b = outer.bounds[node];
 
                 // We're within the computation of a single stage of a
                 // Func, so the bounds should have empty regions and a
@@ -2066,12 +2076,7 @@ struct PartialScheduleNode {
                 internal_assert(b.region_required.empty());
                 internal_assert(b.region_computed.empty());
 
-                int64_t old_stage_iteration_domain_points = 1,
-                    new_inner_iteration_domain_points = 1,
-                    new_outer_iteration_domain_points = 1;
-
                 for (size_t i = 0; i < t.size(); i++) {
-                    old_stage_iteration_domain_points *= b.loops[stage_idx][i].second - b.loops[stage_idx][i].first + 1;
                     int factor = t[i];
                     inner->size[i] = (outer.size[i] + factor - 1) / factor;
                     outer.size[i] = factor;
@@ -2079,15 +2084,9 @@ struct PartialScheduleNode {
                     int64_t extent = parent_bounds.loops[stage_idx][i].second - min + 1;
                     extent = (extent + factor - 1) / factor;
                     b.loops[stage_idx][i] = {min, min + extent - 1};
-                    new_outer_iteration_domain_points *= extent;
-                    new_inner_iteration_domain_points *= factor;
                 }
 
-                // The number of points in an iteration domain is inclusive of children
-                new_outer_iteration_domain_points *= new_inner_iteration_domain_points;
-
-                b.iteration_domain_points += new_outer_iteration_domain_points - old_stage_iteration_domain_points;
-                inner->bounds[node].iteration_domain_points = new_inner_iteration_domain_points;
+                outer.bounds.emplace(node, b);
 
                 outer.children.push_back(inner);
 
@@ -2214,8 +2213,29 @@ struct PartialScheduleNode {
                     bytes *= p.second - p.first + 1;
                 }
                 if (bytes < 64000 && depth > 2) {
+                    // If it's probably a small allocation, and it's
+                    // made more than once, use stack-scoped
+                    // storage. Otherwise let the compiler pick heap
+                    // or stack as it likes.
                     Func(node->func).store_in(MemoryType::Stack);
                 }
+            }
+
+            // Pick a tail strategy for any splits
+            auto tail_strategy = TailStrategy::Auto;
+            if (stage_idx == 0 && !accesses_input_buffer() && !node->is_output) {
+                // Roundup is lowest overhead, provided it doesn't
+                // expand the bounds read on the input or written on
+                // the output. However, you can only really use it on
+                // pure stages that don't access the input anywhere in
+                // their loop nest.
+                tail_strategy = TailStrategy::RoundUp;
+            } else if (stage_idx > 0) {
+                // update stages use guardwithif
+                tail_strategy = TailStrategy::GuardWithIf;
+            } else {
+                // Pure stages that access the input use shiftinwards
+                tail_strategy = TailStrategy::ShiftInwards;
             }
 
             if (!size.empty()) {
@@ -2248,10 +2268,16 @@ struct PartialScheduleNode {
                             split_factor = 4;
                         }
                         if (split_factor > 1) {
-                            s.vectorize(innermost_pure_var->var, split_factor);
+                            VarOrRVar vec(Var(innermost_pure_var->var.name() + "_vec"));
+                            s.split(innermost_pure_var->var, innermost_pure_var->var, vec, split_factor, tail_strategy)
+                                .vectorize(vec);
+                            FuncVars::FuncVar v = *innermost_pure_var;
+                            v.extent = split_factor;
+                            v.var = vec;
+                            vars.vars.insert(vars.vars.begin(), v);
+                            innermost_pure_var->extent += split_factor - 1;
+                            innermost_pure_var->extent /= split_factor;
                         }
-                        innermost_pure_var->extent += split_factor - 1;
-                        innermost_pure_var->extent /= split_factor;
                     }
                 } else {
                     // Do the implied splits
@@ -2275,17 +2301,8 @@ struct PartialScheduleNode {
                                 outer = RVar(parent.var.name() + "o");
                                 inner = RVar(parent.var.name() + "i");
                             }
-                            debug(0) << "Splitting " << parent.var.name() << " by " << factor << '\n';
-                            if (!parent.var.is_rvar && parent.extent % factor == 0 && stage == 0) {
-                                // TODO: Use roundup if this is not the output and the loop nest is not reading any inputs
-                                // otherwise must use guardwithif
-                                s.split(parent.var, outer, inner, (int)factor, TailStrategy::Auto);
-                            } else if (stage > 0) {
-                                // Default is RoundUp, but that can create situations that read out of bounds on the input
-                                s.split(parent.var, outer, inner, (int)factor, TailStrategy::GuardWithIf);
-                            } else {
-                                s.split(parent.var, outer, inner, (int)factor);
-                            }
+                            debug(0) << "Splitting " << parent.var.name() << " by " << factor << "\n";
+                            s.split(parent.var, outer, inner, (int)factor, tail_strategy);
                             v = parent;
                             parent.var = outer;
                             parent.extent = size[i];
@@ -2666,7 +2683,7 @@ struct State {
         int num_children = 0;
         if (!constraints->must_root(node) && constraints->may_inline(node)) {
             // 1) Inline it
-            if (node->stages.size() == 1 && !node->outgoing_edges.empty()) {
+            if (node->stages.size() == 1 && !node->is_output) {
                 auto child = new State(*this);
                 child->root = child->root.inline_func(node);
                 child->num_funcs_scheduled++;
@@ -2853,26 +2870,24 @@ State optimal_schedule_pass(FunctionDAG &dag,
             if (state->num_funcs_scheduled == (int)dag.nodes.size()) {
                 debug(0) << '\n';
 
-                /*
-                debug(0) << "Optimal state?\n";
-                state->dump();
+                if (false) {
+                    debug(0) << "Optimal state?\n";
+                    state->dump();
 
-                debug(0) << "Rest of queue:\n";
-                while (!pending.empty()) {
-                    pending.top()->calculate_cost(dag, params, nullptr, true);
-                    pending.top()->dump();
-                    pending.pop();
+                    debug(0) << "Rest of queue:\n";
+                    while (!pending.empty()) {
+                        // pending.top()->calculate_cost(dag, params, nullptr, true);
+                        pending.top()->dump();
+                        pending.pop();
+                    }
                 }
-                */
 
                 return *state;
             }
 
-
             /*
-
             if (state->num_funcs_scheduled > 0 &&
-                dag.nodes[state->num_funcs_scheduled].func.name() == "scan_y") {
+                dag.nodes[state->num_funcs_scheduled].func.name() == "downsampled_x") {
             */
             if (false) {
                 debug(0) << "\n\n**** Beam: (" << expanded << "):\n";
@@ -3215,6 +3230,67 @@ void autoschedule_test() {
 
     //ThroughputPredictorPipeline throughput_predictor(w, stats);
 
+    //Var x("x"), y("y");
+
+    //{
+        //// In a point-wise pipeline, everything should be fully fused.
+        //Func f("f"), g("g"), h("h");
+        //f(x, y) = (x + y) * (x + y);
+        //g(x, y) = f(x, y) * 2 + 1;
+        //h(x, y) = g(x, y) * 2 + 1;
+
+        //h.estimate(x, 0, 1000).estimate(y, 0, 1000);
+
+        //vector<Function> outputs = {h.function()};
+        //FunctionDAG dag(outputs, params, target);
+
+        //State optimal = optimal_schedule(dag, outputs, params, &throughput_predictor, beam_size);
+
+        //debug(0) << "** Optimal schedule:\n";
+        //optimal.calculate_cost(dag, params, &throughput_predictor, true);
+        //throughput_predictor.evaluate_costs();
+        //optimal.dump();
+        //debug(0) << '\n';
+
+        //optimal.apply_schedule(params);
+        //h.realize(1000, 1000);
+
+    //}
+
+    //{
+        //// In a pipeline with huge expensive stencils and low memory costs, nothing should be fused
+        //Func f("f"), g("g"), h("h");
+        //f(x, y) = (x + y) * (x + 2*y) * (x + 3*y) * (x + 4*y) * (x + 5*y);
+        //Expr e = 0;
+        //for (int i = 0; i < 100; i++) {
+            //e += f(x + i*10, y + i*10);
+        //}
+        //g(x, y) = e;
+        //e = 0;
+        //for (int i = 0; i < 100; i++) {
+            //e += g(x + i*10, y + i*10);
+        //}
+        //h(x, y) = e;
+
+        //h.estimate(x, 0, 1000).estimate(y, 0, 1000);
+
+        //MachineParams cheap_memory = params;
+        //cheap_memory.balance = 1;
+
+        //vector<Function> outputs = {h.function()};
+        //FunctionDAG dag(outputs, cheap_memory, target);
+        //State optimal = optimal_schedule(dag, outputs, cheap_memory, &throughput_predictor, beam_size);
+
+        //debug(0) << "** Optimal schedule:\n";
+        //optimal.calculate_cost(dag, params, &throughput_predictor, true);
+        //throughput_predictor.evaluate_costs();
+        //optimal.dump();
+        //debug(0) << '\n';
+
+        //optimal.apply_schedule(params);
+        //h.realize(1000, 1000);
+    //}
+
     //{
         //// In a pipeline with moderate isotropic stencils, there should be some square tiling
         //Func f("f"), h("h");
@@ -3468,7 +3544,34 @@ void autoschedule_test() {
         //throughput_predictor.evaluate_costs();
         //optimal.dump();
         //debug(0) << '\n';
+    //}
 
+    //{
+        //Buffer<float> im_a(1024, 1024, "a"), im_b(1024, 1024, "b");
+        //im_a.fill(0.0f);
+        //im_b.fill(0.0f);
+
+        //Func c("c"), a("a"), b("b");
+        //Var i, j;
+        //a(j, i) = im_a(j, i);  // TODO: Add wrappers to the search space
+        //b(j, i) = im_b(j, i);
+        //RDom k(0, 1024);
+        //c(j, i) += a(k, i) * b(j, k);
+        //Func out("out");
+        //out(j, i) = c(j, i);
+
+        //out.estimate(j, 0, 1024).estimate(i, 0, 1024);
+
+        //vector<Function> outputs = {out.function()};
+        //FunctionDAG dag(outputs, params, target);
+        //dag.dump();
+        //State optimal = optimal_schedule(dag, outputs, params, nullptr, 1); //&throughput_predictor, 1);
+
+        //debug(0) << "** Optimal schedule:\n";
+        //optimal.calculate_cost(dag, params, &throughput_predictor, true);
+        //throughput_predictor.evaluate_costs();
+        //optimal.dump();
+        //debug(0) << '\n';
     //}
 
 }
