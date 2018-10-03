@@ -14,7 +14,8 @@ import time
 class GeneratorParams(object):
   """Parameters driving the generator, passed as env-vars"""
   def __init__(self, hl_target, hl_seed, pipe_seed, stages,
-               dropout, beam, timeout, predictor_url):
+               dropout, beam, timeout, predictor_url, bin_dir, num_cores,
+               llc_size, balance):
     self.hl_target = hl_target
     self.hl_seed = hl_seed
     self.pipeline_seed = pipe_seed
@@ -22,6 +23,10 @@ class GeneratorParams(object):
     self.dropout = dropout
     self.beam = beam
     self.predictor_url = predictor_url
+    self.bin_dir = bin_dir
+    self.num_cores = num_cores
+    self.llc_size = llc_size 
+    self.balance = balance
 
     self.timeout = timeout
 
@@ -38,6 +43,8 @@ class GeneratorParams(object):
       "HL_RANDOM_DROPOUT": str(self.dropout),
       "HL_BEAM_SIZE": str(self.beam),
       #"HL_THROUGHPUT_PREDICTOR_URL": self.predictor_url,
+      "BIN": self.bin_dir,
+      "HL_MACHINE_PARAMS": "{},{},{}".format(self.num_cores, self.llc_size, self.balance),
     }
 
 def get_pipeline_env(params):
@@ -48,6 +55,9 @@ def get_pipeline_env(params):
 
 
 def build_one(q):
+  count = 0
+  compile_start = time.time()
+
   """Build one random pipeline."""
   while True:
     params = q.get(block=True, timeout=None)
@@ -57,11 +67,18 @@ def build_one(q):
       start = time.time()
       subprocess.check_output(["make", "build"], env=env, timeout=params.timeout)
       elapsed = time.time() - start
-      print("pid {} {}, compiled in {:.2f}s".format(os.getpid(), params, elapsed))
+      count += 1
+      if count % 25 == 0:
+        print("pid {} {}, compiled in {:.2f}s".format(os.getpid(), params, elapsed))
+        m, s = divmod(int(time.time() - compile_start), 60)
+        h, m = divmod(m, 60)
+        print("Compiled {} programs in {:02d}h:{:02d}m:{:02d}s".format(count, h, m, s))
     except subprocess.TimeoutExpired:
       print("pid {} {}, timed out over {:.2f}s".format(os.getpid(), params, params.timeout))
 
     q.task_done()
+
+  print("Finished build_one(): compiled {} programs".format(count))
 
 
 def get_hl_target(seed="root"):
@@ -89,11 +106,13 @@ def main(args):
     if not args.bench_only:
       print("\nBuilding pipelines")
       for p in range(args.pipelines):
-        stages = (p % 30) + 10  # number of stages for that pipeline
+        pipeline_seed = args.node_id + (p * args.num_nodes)
+        stages = (p % 30) + 2  # number of stages for that pipeline
         for s in schedule_seeds:
           params = GeneratorParams(
-            get_hl_target(s), s, p, stages, args.dropout,
-            args.beam_size, args.timeout, args.predictor_url)
+            get_hl_target(s), s, pipeline_seed, stages, args.dropout,
+            args.beam_size, args.timeout, args.predictor_url, args.bin_dir,
+            args.num_cores, args.llc_size, args.balance)
           q.put(params, block=True)
       q.join()
 
@@ -101,15 +120,20 @@ def main(args):
         return
 
     # Sequential benchmarking
-    print("\nBenchmarking pipelines")
+    total = args.pipelines * len(schedule_seeds)
+    print("\nBenchmarking pipelines: {} total".format(total))
+    completed = 0
+    benchmark_start = time.time()
     for p in range(args.pipelines):
-      stages = (p % 30) + 10  # number of stages for that pipeline
+      pipeline_seed = args.node_id + (p * args.num_nodes)
+      stages = (p % 30) + 2  # number of stages for that pipeline
       for s in schedule_seeds:
         params = GeneratorParams(
-          get_hl_target(s), s, p, stages, args.dropout,
-          args.beam_size, args.timeout, args.predictor_url)
+          get_hl_target(s), s, pipeline_seed, stages, args.dropout,
+          args.beam_size, args.timeout, args.predictor_url, args.bin_dir,
+          args.num_cores, args.llc_size, args.balance)
         env = get_pipeline_env(params)
-        env["HL_NUM_THREASD"] = str(os.cpu_count())
+        env["HL_NUM_THREADS"] = str(os.cpu_count())
         start = time.time()
         try:
           start = time.time()
@@ -117,10 +141,16 @@ def main(args):
           # numactl --cpunodebind=0 make bench
           elapsed = time.time() - start
           print("Benchmarking {} took {:.2f}s".format(params, elapsed))
+          completed += 1
         except subprocess.CalledProcessError as e:
           print("Benchmarking {} errored: {}s".format(params, e))
         except subprocess.TimeoutExpired:
           print("Benchmarking {} timed out at {:.2f}s".format(params, params.timeout))
+
+        if completed % 1000 == 0:
+          m, s = divmod(int(time.time() - benchmark_start), 60)
+          h, m = divmod(m, 60)
+          print("Benchmarked {} / {} in {:02d}h:{:02d}m:{:02d}s".format(completed, total, h, m, s))
 
     if args.build_only:
       return
@@ -129,6 +159,7 @@ def main(args):
   os.makedirs(args.results_dir, exist_ok=True)
   path_re = re.compile(r".*pipe(?P<pipe>\d+)")
   seed_re = re.compile("(.*?_seed)(?P<seed>[^_]*)(_.*?)")
+  stage_re = re.compile(".*stages(\d+)")
   if args.evaluate:
     print("\nConsolidating timing reports")
     pipe_seeds = []
@@ -145,13 +176,13 @@ def main(args):
           master_path = re.sub(seed_re, "\g<1>master\g<3>", r).replace(
             get_hl_target(), get_hl_target("master"))
 
-          with open(os.path.join(r, f), 'r') as fid:
+          with open(os.path.join(r, f), "r") as fid:
             new_time = json.load(fid)["time"]
 
-          with open(os.path.join(root_path, f), 'r') as fid:
+          with open(os.path.join(root_path, f), "r") as fid:
             root_time = json.load(fid)["time"]
 
-          with open(os.path.join(master_path, f), 'r') as fid:
+          with open(os.path.join(master_path, f), "r") as fid:
             master_time = json.load(fid)["time"]
 
           pipe_seeds.append(pipe_seed)
@@ -160,7 +191,7 @@ def main(args):
           new_times.append(new_time)
           print(pipe_seed, root_time, master_time, new_time)
 
-    with open(os.path.join(args.results_dir, "evaluation_report.json"), 'w') as fid:
+    with open(os.path.join(args.results_dir, "evaluation_report.json"), "w") as fid:
       report = {
         "pipeline": pipe_seeds,
         "root_time": root_times,
@@ -172,6 +203,8 @@ def main(args):
   else:
     # Gather training dataset
     print("\nGathering training dataset")
+    completed = 0
+    gather_start = time.time()
     for r, dd, ff in os.walk(src):
       for f in ff:
         if f == "features.json":
@@ -181,16 +214,17 @@ def main(args):
           pipe_seed = int(match.group("pipe"))
 
           root_path = re.sub(seed_re, "\g<1>root\g<3>", r)
+          num_stages = int(stage_re.match(r).group(1))
 
           try:
             feats = os.path.join(r, f)
-            with open(feats, 'r') as fid:
+            with open(feats, "r") as fid:
               features = json.load(fid)
             times = feats.replace("features", "timing")
-            with open(times, 'r') as fid:
+            with open(times, "r") as fid:
               timing = json.load(fid)
             times_root = os.path.join(root_path, "timing.json")
-            with open(times_root, 'r') as fid:
+            with open(times_root, "r") as fid:
               timing_root = json.load(fid)
 
             features["pipeline_seed"] = pipe_seed
@@ -198,13 +232,19 @@ def main(args):
             features["time_root"] = timing_root["time"]
 
             elapsed = time.time() - start
-            print(r, elapsed, pipe_seed, features["schedule_seed"], features["time"], features["time_root"])
+            if (completed - 1) % 1000 == 0:
+              m, s = divmod(int(time.time() - gather_start), 60)
+              h, m = divmod(m, 60)
+              print(r, elapsed, pipe_seed, features["schedule_seed"], features["time"], features["time_root"])
 
-            fname = "pipeline_{:03d}_schedule_{:03d}.json".format(pipe_seed, features["schedule_seed"])
-            with open(os.path.join(args.results_dir, fname), 'w') as fid:
+            fname = "pipeline_{:03d}_schedule_{:03d}_stages_{}.json".format(pipe_seed, features["schedule_seed"], num_stages)
+            with open(os.path.join(args.results_dir, fname), "w") as fid:
               json.dump(features, fid)
           except:
-            print(r, "failed")
+            if (completed - 1) % 1000 == 0:
+              print(r, "failed")
+          finally:
+            completed += 1
 
 
 
@@ -229,6 +269,14 @@ if __name__ == "__main__":
   parser.add_argument("--dropout", type=int, default=50)
   parser.add_argument("--beam_size", type=int, default=1)
   parser.add_argument("--timeout", type=float, default=20.0, help="in seconds")
+  parser.add_argument("--node_id", type=int, required=True)
+  parser.add_argument("--num_nodes", type=int, required=True)
+
+  # Autoscheduler MachineParams
+  parser.add_argument("--num_cores", type=int, default=8)
+  # Size of last level cache (in bytes); default = 4096KB
+  parser.add_argument("--llc_size", type=int, default=32768)
+  parser.add_argument("--balance", type=int, default=40)
 
   parser.set_defaults(master_scheduler=False)
 

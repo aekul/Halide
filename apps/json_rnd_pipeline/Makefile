@@ -43,6 +43,7 @@ $(BIN)/$(ID)/random_pipeline.a: $(BIN)/random_pipeline.generator
 	HL_BEAM_SIZE=$(HL_BEAM_SIZE) \
 	HL_DEBUG_CODEGEN=1 \
 	HL_DEBUG=1 \
+	HL_MACHINE_PARAMS=$(HL_MACHINE_PARAMS) \
 	HL_JSON_DUMP=$(BIN)/$(ID)/features.json \
 	$^ -g random_pipeline -o $(BIN)/$(ID) -f random_pipeline \
 		target=$(HL_TARGET)-no_runtime auto_schedule=$(AUTO_SCHEDULE) \
