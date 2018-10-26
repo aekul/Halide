@@ -9,20 +9,21 @@ import os
 import re
 import subprocess
 import time
+import pdb
 
 
 class GeneratorParams(object):
   """Parameters driving the generator, passed as env-vars"""
   def __init__(self, hl_target, hl_seed, pipe_seed, stages,
                dropout, beam, timeout, predictor_url, bin_dir, num_cores,
-               llc_size, balance):
+               llc_size, balance, use_predictor_server):
     self.hl_target = hl_target
     self.hl_seed = hl_seed
     self.pipeline_seed = pipe_seed
     self.stages = stages
     self.dropout = dropout
     self.beam = beam
-    self.predictor_url = predictor_url
+    self.predictor_url = predictor_url if use_predictor_server else ""
     self.bin_dir = bin_dir
     self.num_cores = num_cores
     self.llc_size = llc_size 
@@ -42,7 +43,7 @@ class GeneratorParams(object):
       "PIPELINE_STAGES": str(self.stages),
       "HL_RANDOM_DROPOUT": str(self.dropout),
       "HL_BEAM_SIZE": str(self.beam),
-      #"HL_THROUGHPUT_PREDICTOR_URL": self.predictor_url,
+      "HL_THROUGHPUT_PREDICTOR_URL": self.predictor_url,
       "BIN": self.bin_dir,
       "HL_MACHINE_PARAMS": "{},{},{}".format(self.num_cores, self.llc_size, self.balance),
     }
@@ -75,6 +76,10 @@ def build_one(q):
         print("Compiled {} programs in {:02d}h:{:02d}m:{:02d}s".format(count, h, m, s))
     except subprocess.TimeoutExpired:
       print("pid {} {}, timed out over {:.2f}s".format(os.getpid(), params, params.timeout))
+    except subprocess.CalledProcessError:
+      for k in params.env():
+        print("{}={} \\".format(k, params.env()[k]))
+      print("pid {} {}, error".format(os.getpid(), params.env()))
 
     q.task_done()
 
@@ -112,7 +117,7 @@ def main(args):
           params = GeneratorParams(
             get_hl_target(s), s, pipeline_seed, stages, args.dropout,
             args.beam_size, args.timeout, args.predictor_url, args.bin_dir,
-            args.num_cores, args.llc_size, args.balance)
+            args.num_cores, args.llc_size, args.balance, args.use_predictor_server)
           q.put(params, block=True)
       q.join()
 
@@ -131,7 +136,7 @@ def main(args):
         params = GeneratorParams(
           get_hl_target(s), s, pipeline_seed, stages, args.dropout,
           args.beam_size, args.timeout, args.predictor_url, args.bin_dir,
-          args.num_cores, args.llc_size, args.balance)
+          args.num_cores, args.llc_size, args.balance, args.use_predictor_server)
         env = get_pipeline_env(params)
         env["HL_NUM_THREADS"] = str(os.cpu_count())
         start = time.time()
@@ -143,6 +148,8 @@ def main(args):
           print("Benchmarking {} took {:.2f}s".format(params, elapsed))
           completed += 1
         except subprocess.CalledProcessError as e:
+          for k in env:
+            print("{}={} \\".format(k, env[k]))
           print("Benchmarking {} errored: {}s".format(params, e))
         except subprocess.TimeoutExpired:
           print("Benchmarking {} timed out at {:.2f}s".format(params, params.timeout))
@@ -176,20 +183,23 @@ def main(args):
           master_path = re.sub(seed_re, "\g<1>master\g<3>", r).replace(
             get_hl_target(), get_hl_target("master"))
 
-          with open(os.path.join(r, f), "r") as fid:
-            new_time = json.load(fid)["time"]
+          try:
+            with open(os.path.join(r, f), "r") as fid:
+              new_time = json.load(fid)["time"]
 
-          with open(os.path.join(root_path, f), "r") as fid:
-            root_time = json.load(fid)["time"]
+            with open(os.path.join(root_path, f), "r") as fid:
+              root_time = json.load(fid)["time"]
 
-          with open(os.path.join(master_path, f), "r") as fid:
-            master_time = json.load(fid)["time"]
+            with open(os.path.join(master_path, f), "r") as fid:
+              master_time = json.load(fid)["time"]
 
-          pipe_seeds.append(pipe_seed)
-          root_times.append(root_time)
-          master_times.append(master_time)
-          new_times.append(new_time)
-          print(pipe_seed, root_time, master_time, new_time)
+            pipe_seeds.append(pipe_seed)
+            root_times.append(root_time)
+            master_times.append(master_time)
+            new_times.append(new_time)
+            print(pipe_seed, root_time, master_time, new_time)
+          except:
+            pass
 
     with open(os.path.join(args.results_dir, "evaluation_report.json"), "w") as fid:
       report = {
@@ -257,6 +267,7 @@ if __name__ == "__main__":
 
   parser.add_argument("--evaluate", dest="evaluate", action="store_true", help="evaluate autoscheduler, instead of generating data samples")
   parser.add_argument("--predictor_url", type=str, default="tcp://localhost:5555", help="url of the throughput predictor server, useful when evaluating our predictions")
+  parser.add_argument("--use_predictor_server", action="store_true", help="should we use the predictor server?")
 
   # Selector to run only as subset of steps
   parser.add_argument("--build_only", dest="build_only", action="store_true", help="do not benchmark the pipelines")
@@ -269,8 +280,8 @@ if __name__ == "__main__":
   parser.add_argument("--dropout", type=int, default=50)
   parser.add_argument("--beam_size", type=int, default=1)
   parser.add_argument("--timeout", type=float, default=20.0, help="in seconds")
-  parser.add_argument("--node_id", type=int, required=True)
-  parser.add_argument("--num_nodes", type=int, required=True)
+  parser.add_argument("--node_id", type=int, default=0)
+  parser.add_argument("--num_nodes", type=int, default=1)
 
   # Autoscheduler MachineParams
   parser.add_argument("--num_cores", type=int, default=8)
