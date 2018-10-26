@@ -2416,6 +2416,18 @@ struct State {
         root.get_compute_sites(compute_site, store_site);
         root.compute_features(params, compute_site, store_site, 1, 1, nullptr, root, nullptr, &features);
 
+        std::unique_ptr<BlockNode> block = make_unique<BlockNode>();
+        std::map<std::string, Expr> store_at_bounds;
+        std::map<std::string, Expr> compute_bounds;
+        std::map<std::string, int> strides;
+        std::map<std::string, double> parallelism;
+        root.create_loop_nest(dag, params, nullptr, 0, 0, 0, block.get(), store_at_bounds, compute_bounds, strides, parallelism, params.parallelism, features);
+        json jdata = block->to_json();
+
+        if (json_dump) {
+          (*json_dump)["features"] = jdata;
+        }
+
         //for (const auto &n : dag.nodes) {
             //const auto &sched_feat = features[&n];
             //if (sched_feat.size() < n.stages.size()) {
@@ -2513,7 +2525,7 @@ struct State {
         // Use external throughput predictor
         if (throughput_predictor) {
             // Won't actually run anything until we call evaluate_costs...
-            //throughput_predictor->enqueue(jdata, &cost);
+            throughput_predictor->enqueue(jdata, &cost);
         } else {
             // We have no throughput predictor.
             for (auto& p : features) {
@@ -2681,19 +2693,9 @@ struct State {
                     }
                 }
             }
+
         }
 
-        std::unique_ptr<BlockNode> block = make_unique<BlockNode>();
-        std::map<std::string, Expr> store_at_bounds;
-        std::map<std::string, Expr> compute_bounds;
-        std::map<std::string, int> strides;
-        std::map<std::string, double> parallelism;
-        root.create_loop_nest(dag, params, nullptr, 0, 0, 0, block.get(), store_at_bounds, compute_bounds, strides, parallelism, params.parallelism, features);
-        json jdata = block->to_json();
-
-        if (json_dump) {
-          (*json_dump)["features"] = jdata;
-        }
 
         cost_calculations++;
         return true;
