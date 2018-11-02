@@ -138,7 +138,7 @@ def main(args):
           args.beam_size, args.timeout, args.predictor_url, args.bin_dir,
           args.num_cores, args.llc_size, args.balance, args.use_predictor_server)
         env = get_pipeline_env(params)
-        env["HL_NUM_THREADS"] = str(os.cpu_count())
+        env["HL_NUM_THREADS"] = str(args.hl_threads)
         start = time.time()
         try:
           start = time.time()
@@ -280,6 +280,10 @@ if __name__ == "__main__":
   parser.add_argument("--dropout", type=int, default=50)
   parser.add_argument("--beam_size", type=int, default=1)
   parser.add_argument("--timeout", type=float, default=20.0, help="in seconds")
+  parser.add_argument("--hl_threads", type=int, default=8)
+
+  # For distributed generation (to enseure that different nodes generate different
+  # groups of programs)
   parser.add_argument("--node_id", type=int, default=0)
   parser.add_argument("--num_nodes", type=int, default=1)
 
