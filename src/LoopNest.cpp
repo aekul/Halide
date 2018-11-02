@@ -130,21 +130,21 @@ json ComputeNode::to_json() const {
   return jdata;
 }
 
-std::string LoopNode::MakeVarName(Function f, int var_index, int stage_index, int vector_size, int depth) {
+std::string LoopNode::MakeVarName(Function f, int stage_index, int depth, VarOrRVar var, bool parallel) {
   std::ostringstream var_name;
   var_name << f.name();
   var_name << ".s" << stage_index;
-  var_name << ".v" << var_index;
-  if (vector_size > 1) {
-    var_name << ".vec" << vector_size;
+  var_name << "." << var.name();
+  if (parallel && var.name().rfind("_par") == std::string::npos) {
+    var_name << "_par";
   }
   var_name << "." << depth;
   return var_name.str();
 }
 
-LoopNode::LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy)
+LoopNode::LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var)
   : func{f}
-  , var_name{MakeVarName(f, var_index, stage_index, vector_size, depth)}
+  , var_name{MakeVarName(f, stage_index, depth, var, parallel)}
   , var{Variable::make(Int(32), var_name)}
   , var_index{var_index}
   , stage_index{stage_index}
@@ -175,7 +175,6 @@ json LoopNode::to_json() const {
   std::stringstream s;
   s << var;
   jdata["var"] = s.str();
-  jdata["var_index"] = var_index;
   jdata["extent"] = extent;
   jdata["vector_size"] = vector_size;
   jdata["parallel"] = parallel;

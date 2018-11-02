@@ -30,7 +30,10 @@ set(RUNTIME_CPP
   fake_thread_pool
   float16_t
   gpu_device_selection
+  hexagon_cache_allocator
   hexagon_cpu_features
+  hexagon_dma
+  hexagon_dma_pool
   hexagon_host
   ios_io
   linux_clock
@@ -74,6 +77,7 @@ set(RUNTIME_CPP
   pseudostack
   qurt_allocator
   qurt_hvx
+  qurt_hvx_vtcm
   qurt_init_fini
   qurt_threads
   qurt_threads_tsan
@@ -265,6 +269,7 @@ set(HEADER_FILES
   Argument.h
   AssociativeOpsTable.h
   Associativity.h
+  AsyncProducers.h
   AutoSchedule.h
   AutoScheduleNew.h  
   AutoScheduleUtils.h
@@ -299,6 +304,8 @@ set(HEADER_FILES
   DebugToFile.h
   Definition.h
   Deinterleave.h
+  Derivative.h
+  DerivativeUtils.h
   DeviceArgument.h
   DeviceInterface.h
   Dimension.h
@@ -374,6 +381,7 @@ set(HEADER_FILES
   Reduction.h
   RegionCosts.h
   RemoveDeadAllocations.h
+  RemoveExternLoops.h
   RemoveTrivialForLoops.h
   RemoveUndef.h
   Schedule.h
@@ -433,6 +441,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   ApplySplit.cpp
   AssociativeOpsTable.cpp
   Associativity.cpp
+  AsyncProducers.cpp
   AutoSchedule.cpp
   AutoScheduleNew.cpp
   AutoScheduleUtils.cpp
@@ -467,6 +476,8 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   DebugToFile.cpp
   Definition.cpp
   Deinterleave.cpp
+  Derivative.cpp
+  DerivativeUtils.cpp
   DeviceArgument.cpp
   DeviceInterface.cpp
   Dimension.cpp
@@ -532,6 +543,7 @@ add_library(Halide ${HALIDE_LIBRARY_TYPE}
   Reduction.cpp
   RegionCosts.cpp
   RemoveDeadAllocations.cpp
+  RemoveExternLoops.cpp
   RemoveTrivialForLoops.cpp
   RemoveUndef.cpp
   Schedule.cpp

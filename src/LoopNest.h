@@ -4,6 +4,7 @@
 #include "LoopNestFeaturizer.h"
 #include "PipelineFeatures.h"
 #include "ScheduleFeatures.h"
+#include "Func.h"
 
 #include <string>
 
@@ -86,9 +87,9 @@ struct LoopNode : LoopLevelNode {
   std::unique_ptr<BlockNode> body;
   TailStrategy tail_strategy;
 
-  static std::string MakeVarName(Function f, int var_index, int stage_index, int vector_size, int depth);
+  static std::string MakeVarName(Function f, int stage_index, int depth, VarOrRVar var, bool parallel);
 
-  LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy);
+  LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var);
 
   void dump(int indent_level = 0) const override;
   json to_json() const override;

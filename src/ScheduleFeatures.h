@@ -42,8 +42,8 @@ struct ScheduleFeatures {
     int64_t inlined_calls = 0; // For inlined Funcs, how many calls are made to this Func total
 
     // Logically these features should be grouped earlier, but the convnet currently doesn't know about them
-    int64_t bytes_read_per_realization = 0; // Number of bytes loaded from all inputs per production
-    int64_t lines_read_per_realization = 0; // Number of contiguous segments of memory loaded from all inputs per production
+    int64_t unique_bytes_read_per_realization = 0; // Number of unique bytes loaded from all inputs per production
+    int64_t unique_lines_read_per_realization = 0; // Number of unique contiguous segments of memory loaded from all inputs per production
     int64_t allocation_bytes_read_per_realization = 0; // The sum of the sizes of the allocations accessed per production. Gives a hint as to the likely locality of it.
 
     int64_t working_set = 0; // The sum of the sizes of the allocations within the production of this Func. Probably a good thing if it fits in cache.
@@ -54,13 +54,16 @@ struct ScheduleFeatures {
 
     int native_vector_size; // The native vector size for the narrowest type used.
 
+    int64_t non_unique_bytes_read_per_realization = 0; // Number of bytes read per realization, counting reloads of the same memory.
 
     int64_t total_element_compute_cost = 0;
     int64_t compute_cost_inlined = 0;
     double vector_overcompute_factor = 0;
     double idle_core_wastage = 0;
-    double load_cache_misses = 0;
-    double load_cost_of_miss = 0;
+    double load_cold_cache_misses = 0;
+    double cost_of_cold_miss = 0;
+    double capacity_cache_misses = 0;
+    double cost_of_capacity_miss = 0;
     double memory_load_cost = 0;
     double store_cache_misses = 0;
     double store_cost_of_miss = 0;
@@ -90,20 +93,23 @@ struct ScheduleFeatures {
                  << "    innermost_bytes_at_root:               " << innermost_bytes_at_root << '\n'
                  << "    bytes_read_per_tile:                   " << bytes_read_per_tile << '\n'
                  << "    inlined_calls:                         " << inlined_calls << '\n'
-                 << "    bytes_read_per_realization:            " << bytes_read_per_realization << '\n'
-                 << "    lines_read_per_realization:            " << lines_read_per_realization << '\n'
+                 << "    unique_bytes_read_per_realization:     " << unique_bytes_read_per_realization << '\n'
+                 << "    unique_lines_read_per_realization:     " << unique_lines_read_per_realization << '\n'
                  << "    allocation_bytes_read_per_realization: " << allocation_bytes_read_per_realization << '\n'
                  << "    working_set:                           " << working_set << '\n'
                  << "    vector_size:                           " << vector_size << '\n'
                  << "    rounded_innermost_pure_loop_extent     " << rounded_innermost_pure_loop_extent << '\n'
                  << "    native_vector_size:                    " << vector_size << '\n'
+                 << "    non_unique_bytes_read_per_realization: " << non_unique_bytes_read_per_realization << '\n'
                  << "    total_element_compute_cost:            " << total_element_compute_cost << '\n'
                  << "    compute_cost_inlined:                  " << compute_cost_inlined << '\n'
                  << "    vector_overcompute_factor:             " << vector_overcompute_factor << '\n'
                  << "    idle_core_wastage:                     " << idle_core_wastage << '\n'
-                 << "    load_cache_misses:                     " << load_cache_misses << '\n'
-                 << "    load_cost_of_miss:                     " << load_cost_of_miss << '\n'
-                 << "    memory_load_cost:                      " << memory_load_cost << '\n'
+                 << "    load_cold_cache_misses                 " << load_cold_cache_misses << '\n'
+                 << "    cost_of_cold_miss                      " << cost_of_cold_miss << '\n'
+                 << "    capacity_cache_misses                  " << capacity_cache_misses << '\n'
+                 << "    cost_of_capacity_miss                  " << cost_of_capacity_miss << '\n'
+                 << "    memory_load_cost                       " << memory_load_cost << '\n'
                  << "    store_cache_misses:                    " << store_cache_misses << '\n'
                  << "    store_cost_of_miss:                    " << store_cost_of_miss << '\n'
                  << "    memory_store_cost:                     " << memory_store_cost << '\n'
@@ -136,8 +142,8 @@ struct ScheduleFeatures {
                 innermost_bytes_at_root,
                 bytes_read_per_tile,
                 inlined_calls,
-                bytes_read_per_realization,
-                lines_read_per_realization,
+                unique_bytes_read_per_realization,
+                unique_lines_read_per_realization,
                 allocation_bytes_read_per_realization,
                 working_set,
                 vector_size,
@@ -147,8 +153,10 @@ struct ScheduleFeatures {
                 compute_cost_inlined, 
                 vector_overcompute_factor,
                 idle_core_wastage,
-                load_cache_misses,
-                load_cost_of_miss,
+                load_cold_cache_misses,
+                cost_of_cold_miss,
+                capacity_cache_misses,
+                cost_of_capacity_miss,
                 memory_load_cost,
                 store_cache_misses,
                 store_cost_of_miss,
@@ -178,8 +186,8 @@ struct ScheduleFeatures {
             jdata["innermost_bytes_at_root"]               = innermost_bytes_at_root;
             jdata["bytes_read_per_tile"]                   = bytes_read_per_tile;
             jdata["inlined_calls"]                         = inlined_calls;
-            jdata["bytes_read_per_realization"]            = bytes_read_per_realization;
-            jdata["lines_read_per_realization"]            = lines_read_per_realization;
+            jdata["unique_bytes_read_per_realization"]            = unique_bytes_read_per_realization;
+            jdata["unique_lines_read_per_realization"]            = unique_lines_read_per_realization;
             jdata["allocation_bytes_read_per_realization"] = allocation_bytes_read_per_realization;
             jdata["working_set"]                           = working_set;
             jdata["vector_size"]                           = vector_size;
@@ -188,9 +196,10 @@ struct ScheduleFeatures {
             jdata["total_element_compute_cost"] = total_element_compute_cost;
             jdata["compute_cost_inlined"] = compute_cost_inlined;
             jdata["vector_overcompute_factor"] = vector_overcompute_factor;
-            jdata["idle_core_wastage"] = idle_core_wastage;
-            jdata["load_cache_misses"] = load_cache_misses;
-            jdata["load_cost_of_miss"] = load_cost_of_miss;
+            jdata["load_cold_cache_misses"] = load_cold_cache_misses;
+            jdata["cost_of_cold_miss"] = cost_of_cold_miss;
+            jdata["capacity_cache_misses"] = capacity_cache_misses;
+            jdata["cost_of_capacity_miss"] = cost_of_capacity_miss;
             jdata["memory_load_cost"] = memory_load_cost;
             jdata["store_cache_misses"] = store_cache_misses;
             jdata["store_cost_of_miss"] = store_cost_of_miss;
