@@ -25,6 +25,7 @@ struct BlockNode;
 struct LoopLevelNode {
   virtual void dump(int indent_level = 0) const = 0;
   virtual json to_json() const = 0;
+  virtual ~LoopLevelNode() {}
   std::string indent(int indent_level) const {
     return std::string(2 * indent_level, ' ');
   }
