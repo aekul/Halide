@@ -97,7 +97,7 @@ def main(args):
   subprocess.check_output(["make", "build_shared"])
 
   if args.evaluate:
-    schedule_seeds = ["root", "master", 0]
+    schedule_seeds = ["root", "master", 10000]
   else:
     schedule_seeds = ["root"] + list(range(args.schedules))
 

@@ -37,10 +37,21 @@ void ThroughputPredictor::enqueue(const json &features, double* cost) {
   
   // Launch prediction requests
   json request_payload;
-  request_payload["request_type"] = 1;
   request_payload["query_id"] = query_id_;
   request_payload["pipe_id"] = pipeline_id_;
   request_payload["features"] = features;
+
+  requests.push_back(request_payload);
+  costs.push_back(cost);
+
+  // TODO: launch another thread to receive and update the queries cost
+  query_id_++;
+}
+
+bool ThroughputPredictor::join() {
+  json request_payload;
+  request_payload["request_type"] = 1;
+  request_payload["requests"] = requests;
   std::string data = request_payload.dump();
   zmq::message_t request(data.size());
   memcpy(request.data(), data.c_str(), data.size());
@@ -52,19 +63,13 @@ void ThroughputPredictor::enqueue(const json &features, double* cost) {
   std::string smessage(static_cast<char*>(reply.data()), reply.size());
   
   json response = json::parse(smessage.data());
-  std::cout << " received " << response << "\n";
-  *cost = response["cost"];
 
-  // TODO: launch another thread to receive and update the queries cost
-  query_id_++;
-}
-
-bool ThroughputPredictor::join() {
-  if (true) {  // TODO: join all requests, make sure we have the costs
-    return true;
+  for (int i = 0, N = costs.size(); i < N; i++) {
+    *costs[i] = response["cost"][i];
   }
-
-  return false;
+  requests.clear();
+  costs.clear();
+  return true;
 }
 
 

@@ -32,6 +32,8 @@ private:
   int query_id_;
   int pipeline_id_;
   std::map <int, double*> cost_map_;
+  std::vector<json> requests;
+  std::vector<double*> costs;
 };
 
 } // namespace AutoScheduleModel
