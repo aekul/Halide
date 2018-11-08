@@ -85,12 +85,13 @@ struct LoopNode : LoopLevelNode {
   int vector_size;
   const BlockNode* parent = nullptr;
   bool parallel;
+  bool unrolled;
   std::unique_ptr<BlockNode> body;
   TailStrategy tail_strategy;
 
   static std::string MakeVarName(Function f, int stage_index, int depth, VarOrRVar var, bool parallel);
 
-  LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var);
+  LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled);
 
   void dump(int indent_level = 0) const override;
   json to_json() const override;

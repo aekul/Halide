@@ -2069,6 +2069,7 @@ struct LoopNest {
                     , fv.parallel
                     , fv.tail_strategy
                     , fv.var
+                    , fv.unrolled
                 );
 
                 std::string key = var_base_name(node->func, var_index);
@@ -3142,7 +3143,7 @@ struct LoopNest {
                         size_t limit = symbolic_loop.size() + start;
 
                         for (size_t i = start; i < limit; i++) {
-                            auto v = vars.vars[i];
+                            auto& v = vars.vars[i];
                             if (v.exists) {
                                 if (v.var.is_rvar) {
                                     limit--;
@@ -3291,7 +3292,7 @@ struct State {
         json jdata = block->to_json();
 
         if (json_dump) {
-          (*json_dump)["features"] = jdata;
+            (*json_dump)["features"] = jdata;
         }
 
         cost = 0;

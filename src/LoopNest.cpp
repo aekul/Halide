@@ -142,7 +142,7 @@ std::string LoopNode::MakeVarName(Function f, int stage_index, int depth, VarOrR
   return var_name.str();
 }
 
-LoopNode::LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var)
+LoopNode::LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled)
   : func{f}
   , var_name{MakeVarName(f, stage_index, depth, var, parallel)}
   , var{Variable::make(Int(32), var_name)}
@@ -152,6 +152,7 @@ LoopNode::LoopNode(Function f, int var_index, int stage_index, int64_t extent, i
   , vector_size{vector_size}
   , parent{parent}
   , parallel{parallel}
+  , unrolled{unrolled}
   , body{make_unique<BlockNode>()}
   , tail_strategy{tail_strategy}
 {
@@ -178,6 +179,7 @@ json LoopNode::to_json() const {
   jdata["extent"] = extent;
   jdata["vector_size"] = vector_size;
   jdata["parallel"] = parallel;
+  jdata["unrolled"] = unrolled;
   jdata["block"] = body->to_json();
   jdata["is_round_up"] = tail_strategy == TailStrategy::RoundUp;
   jdata["is_guard_with_if"] = tail_strategy == TailStrategy::GuardWithIf;
