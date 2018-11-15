@@ -92,6 +92,8 @@ bool random_dropout() {
 struct SymbolicBound {
     vector<pair<Expr, Expr>> region_computed;
     vector<pair<Expr, Expr>> region_required;
+    // for each stage, symbolic loops over computed region for that stage
+    vector<vector<pair<Expr, Expr>>> loops;
 };
 
 // A concrete set of bounds for a Func. These are created and
@@ -360,6 +362,22 @@ struct FunctionDAG {
             int64_t c_min = 0, c_max = 0;
         };
 
+        void loop_nest_for_region_symbolic(int stage_idx, SymbolicBound* bound) const {
+            const auto &s = stages[stage_idx];
+            map<string, Expr> computed_map;
+            for (int i = 0; i < func.dimensions(); i++) {
+                computed_map[region_required[i].min.as<Variable>()->name] = bound->region_computed[i].first;
+                computed_map[region_required[i].max.as<Variable>()->name] = bound->region_computed[i].second;
+            }
+
+            for (size_t i = 0; i < s.loop.size(); i++) {
+                const auto &l = s.loop[i];
+                Expr min = simplify(substitute(computed_map, l.min));
+                Expr max = simplify(substitute(computed_map, l.max));
+                bound->loops[stage_idx].push_back({min, max});
+            }
+
+        }
 
         // Get the loop nest shape as a function of the region computed
         void loop_nest_for_region(int stage_idx,
@@ -2032,8 +2050,9 @@ struct LoopNest {
                           const LoopNest::ScheduleData& schedule_data) const {
 
         auto get_var_index = [&](const FuncVars::FuncVar& fv) {
-            for (size_t i = 0, N = node->func.args().size(); i < N; i++) {
-                if (node->func.args()[i] == fv.orig.name()) {
+            const auto &symbolic_loop = stage->loop;
+            for (size_t i = 0; i < symbolic_loop.size(); i++) {
+                if (symbolic_loop[i].var == fv.orig.name()) {
                     return i;
                 }
             }
@@ -2110,6 +2129,7 @@ struct LoopNest {
                 strides[key] = stride;
                 stride *= extent;
             }
+
             block->add_child(std::move(alloc));
         };
 
@@ -2552,6 +2572,10 @@ struct LoopNest {
         }
 
         f->required_to_computed_symbolic(symbolic_bound.get());
+        symbolic_bound->loops.resize(f->stages.size());
+        for (int i = 0; i < (int)f->stages.size(); i++) {
+            f->loop_nest_for_region_symbolic(i, symbolic_bound.get());
+        }
 
         return symbolic_bound;
     }
