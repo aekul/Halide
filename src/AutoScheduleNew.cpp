@@ -2047,7 +2047,7 @@ struct LoopNest {
                           double num_cores,
                           const StageMap<ScheduleFeatures>& features,
                           map<const FunctionDAG::Node::Stage *, LoopNest::FuncVars>& vars_map,
-                          const LoopNest::ScheduleData& schedule_data) const {
+                          LoopNest::ScheduleData& schedule_data) const {
 
         auto get_var_index = [&](const FuncVars::FuncVar& fv) {
             const auto &symbolic_loop = stage->loop;
@@ -2069,40 +2069,6 @@ struct LoopNest {
 
             return 1;
         };
-
-        if (vars_map.count(stage) > 0) {
-            FuncVars func_vars = vars_map[stage];
-
-            for (int i = func_vars.vars.size() - 1; i >= 0; i--) {
-                const auto& fv = func_vars.vars[i]; 
-                auto var_index = get_var_index(fv);
-                int inner_extent = get_inner_extent(func_vars, i);
-                std::unique_ptr<LoopNode> loop_node = make_unique<LoopNode>(
-                    node->func
-                    , var_index
-                    , stage_idx
-                    , fv.extent
-                    , fv.vector_size 
-                    , block
-                    , depth
-                    , fv.parallel
-                    , fv.tail_strategy
-                    , fv.var
-                    , fv.unrolled
-                );
-
-                std::string key = var_base_name(node->func, var_index);
-                user_assert(compute_bounds.count(key) > 0);
-                compute_bounds[key] = simplify(loop_node->var * IntImm::make(Int(32), inner_extent) + compute_bounds[key]);
-
-                BlockNode* child_block = loop_node->body.get();
-                block->add_child(std::move(loop_node));
-                block = child_block;
-
-                indent_level++;
-                depth++;
-            }
-        }
 
         auto add_alloc_node = [&](const FunctionDAG::Node *f, const std::string& name) {
             std::unique_ptr<AllocNode> alloc = make_unique<AllocNode>();
@@ -2149,6 +2115,52 @@ struct LoopNest {
             }
         }
 
+        auto add_loop_node = [&](FuncVars& func_vars, int i) {
+            const auto& fv = func_vars.vars[i]; 
+            auto var_index = get_var_index(fv);
+            int inner_extent = get_inner_extent(func_vars, i);
+            std::unique_ptr<LoopNode> loop_node = make_unique<LoopNode>(
+                node->func
+                , var_index
+                , stage_idx
+                , fv.extent
+                , fv.vector_size 
+                , block
+                , depth
+                , fv.parallel
+                , fv.tail_strategy
+                , fv.var
+                , fv.unrolled
+            );
+
+            std::string key = var_base_name(node->func, var_index);
+            user_assert(compute_bounds.count(key) > 0);
+            compute_bounds[key] = simplify(loop_node->var * IntImm::make(Int(32), inner_extent) + compute_bounds[key]);
+
+            BlockNode* child_block = loop_node->body.get();
+            block->add_child(std::move(loop_node));
+            block = child_block;
+
+            indent_level++;
+            depth++;
+
+            func_vars.vars.pop_back();
+        };
+
+        if (vars_map.count(stage) > 0) {
+            FuncVars& func_vars = vars_map[stage];
+
+            for (int i = func_vars.vars.size() - 1; i >= 0; i--) {
+                const auto& fv = func_vars.vars[i]; 
+                add_loop_node(func_vars, i);
+
+                auto it = schedule_data.loop_levels.find(this);
+                if (it != schedule_data.loop_levels.end() && it->second == fv.var.name()) {
+                    break; 
+                }
+            }
+        }
+
         // Alloc in reverse topological order
         for (int i = 0, N = dag.nodes.size(); i < N; i++) {
             const auto& f = &dag.nodes[i];
@@ -2169,6 +2181,13 @@ struct LoopNest {
         }
 
         if (innermost) {
+            FuncVars& func_vars = vars_map[stage];
+            user_assert(func_vars.vars.size() <= 1);
+            // Possibly add vectorized loop
+            if (func_vars.vars.size() > 0) {
+                add_loop_node(func_vars, 0);
+            }
+
             Definition def = node->func.definition();
             if (stage_idx > 0) def = node->func.updates()[stage_idx - 1];
 
@@ -2995,6 +3014,7 @@ struct LoopNest {
 
     struct ScheduleData {
         set<const FunctionDAG::Node*> store_on_stack_set;
+        map<const LoopNest*, std::string> loop_levels;
     };
 
     void apply(LoopLevel here,
@@ -3107,6 +3127,7 @@ struct LoopNest {
                     }
                     internal_assert(innermost_var);
                     here = LoopLevel(node->func, innermost_var->var);
+                    schedule_data.loop_levels[this] = innermost_var->var.name();
 
                     // TODO: Do an aligned unroll of anything with mods/divs on the coordinates.
 
@@ -3238,6 +3259,7 @@ struct LoopNest {
                     for (const auto &v : vars.vars) {
                         if (!v.exists) continue;
                         here = LoopLevel(node->func, v.var);
+                        schedule_data.loop_levels[this] = v.var.name();
                         found = true;
                         break;
                     }
@@ -3294,7 +3316,8 @@ struct State {
         return h;
     }
 
-    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params, ThroughputPredictor*throughput_predictor, bool verbose = false,
+
+    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params, ThroughputPredictor*throughput_predictor, BlockNode& block, bool verbose = false,
         json *json_dump = nullptr) {
         NodeMap<const LoopNest *> compute_site, store_site;
         compute_site.make_large(dag.nodes.size());
@@ -3305,15 +3328,14 @@ struct State {
         root->get_compute_sites(compute_site, store_site);
         root->compute_features(params, compute_site, store_site, 1, 1, nullptr, *root, nullptr, &features);
 
-        std::unique_ptr<BlockNode> block = make_unique<BlockNode>();
         std::map<std::string, Expr> store_at_bounds;
         std::map<std::string, Expr> compute_bounds;
         std::map<std::string, int> strides;
         std::map<std::string, double> parallelism;
 
         auto vars_and_schedule_data = apply_schedule(params, true);
-        root->create_loop_nest(dag, params, nullptr, 0, 0, 0, block.get(), store_at_bounds, compute_bounds, strides, parallelism, params.parallelism, features, vars_and_schedule_data.first, vars_and_schedule_data.second);
-        json jdata = block->to_json();
+        root->create_loop_nest(dag, params, nullptr, 0, 0, 0, &block, store_at_bounds, compute_bounds, strides, parallelism, params.parallelism, features, vars_and_schedule_data.first, vars_and_schedule_data.second);
+        json jdata = block.to_json();
 
         if (json_dump) {
             (*json_dump)["features"] = jdata;
@@ -3585,7 +3607,8 @@ struct State {
                 child->root = new_root;
                 child->num_funcs_scheduled++;
                 // TODO: filter children here instead of calculating the cost of children we don't want.
-                if (child->calculate_cost(dag, params, throughput_predictor)) {
+                BlockNode block;
+                if (child->calculate_cost(dag, params, throughput_predictor, block)) {
                     internal_assert(child->root->computes(node)) << "Failed to inline " << node->func.name() << '\n';
                     num_children++;
                     accept_child(std::move(child));
@@ -3602,7 +3625,8 @@ struct State {
                 auto child = make_child();
                 child->root = std::move(n);
                 child->num_funcs_scheduled++;
-                if (child->calculate_cost(dag, params, throughput_predictor)) {
+                BlockNode block;
+                if (child->calculate_cost(dag, params, throughput_predictor, block)) {
                     internal_assert(child->root->computes(node)) << "Failed to inject realization of " << node->func.name() << '\n';
                     num_children++;
                     accept_child(std::move(child));
@@ -4088,10 +4112,11 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
     string json_path = get_env_variable("HL_JSON_DUMP");
 
     // Just to dump the json features
+    BlockNode block;
     if (json_path.empty()) {  // do not store json dump
-      optimal->calculate_cost(dag, params, tp, true, nullptr);
+      optimal->calculate_cost(dag, params, tp, block, true, nullptr);
     } else {
-      optimal->calculate_cost(dag, params, tp, true, &jdata);
+      optimal->calculate_cost(dag, params, tp, block, true, &jdata);
     }
 
     // Apply the schedules
