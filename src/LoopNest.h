@@ -19,16 +19,55 @@ namespace Internal {
 using std::string;
 using std::vector;
 using std::map;
+
+// For testing
+struct PipelineLoop {
+  std::string func_name;
+  std::string var_name;
+  int stage_index;
+  bool parallel;
+  bool vectorized;
+  bool unrolled;
+  std::set<std::string> compute_here; 
+  std::set<std::string> store_here; 
+
+  PipelineLoop(const std::string& func_name, const std::string& var_name, int stage_index, bool parallel, bool vectorized, bool unrolled)
+    : func_name{func_name}
+    , var_name{var_name}
+    , stage_index{stage_index}
+    , parallel{parallel}
+    , vectorized{vectorized}
+    , unrolled{unrolled}
+  {}
+
+  void print(int depth = 0);
+  vector<std::shared_ptr<PipelineLoop>> children;
+
+  bool match(const PipelineLoop& other);
+
+  static std::vector<std::shared_ptr<PipelineLoop>> create(const std::vector<std::string>& lines);
+};
+
   
 struct LoopNode;
 struct BlockNode;
 struct LoopLevelNode {
   virtual void dump(int indent_level = 0) const = 0;
   virtual json to_json() const = 0;
+  virtual std::vector<std::shared_ptr<PipelineLoop>> create_pipeline_loop_nest() const = 0;
+  virtual std::set<std::string> get_compute_funcs() const {
+    return {};
+  }
+
+  virtual std::set<std::string> get_store_funcs() const {
+    return {};
+  }
   virtual ~LoopLevelNode() {}
   std::string indent(int indent_level) const {
     return std::string(2 * indent_level, ' ');
   }
+
+  std::string basic_name(const std::string& name) const;
 };
 
 struct AllocNode : LoopLevelNode {
@@ -41,6 +80,8 @@ struct AllocNode : LoopLevelNode {
 
   void dump(int indent_level = 0) const override;
   json to_json() const override;
+  std::vector<std::shared_ptr<PipelineLoop>> create_pipeline_loop_nest() const override;
+  std::set<std::string> get_store_funcs() const override;
 };
 
 struct BlockNode : LoopLevelNode {
@@ -53,7 +94,12 @@ struct BlockNode : LoopLevelNode {
   void add_child(std::unique_ptr<AllocNode> child);
 
   void dump(int indent_level = 0) const override;
+  std::vector<std::shared_ptr<PipelineLoop>> create_pipeline_loop_nest() const override;
   json to_json() const override;
+
+  bool matches_pipeline_loop_nest(const std::vector<Function> &outputs);
+  std::set<std::string> get_compute_funcs() const override;
+  std::set<std::string> get_store_funcs() const override;
 };
 
 struct ComputeNode : LoopLevelNode {
@@ -71,6 +117,8 @@ struct ComputeNode : LoopLevelNode {
 
   void featurize();
   std::vector<const LoopNode*> get_loop_stack() const;
+  std::vector<std::shared_ptr<PipelineLoop>> create_pipeline_loop_nest() const override;
+  std::set<std::string> get_compute_funcs() const override;
   void dump(int indent_level = 0) const override;
   json to_json() const override;
 };
@@ -93,6 +141,7 @@ struct LoopNode : LoopLevelNode {
 
   LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled);
 
+  std::vector<std::shared_ptr<PipelineLoop>> create_pipeline_loop_nest() const override;
   void dump(int indent_level = 0) const override;
   json to_json() const override;
 };

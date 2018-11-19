@@ -211,6 +211,7 @@ public:
      * Pipeline's Funcs. Helpful for understanding what a schedule is
      * doing. */
     void print_loop_nest();
+    std::string get_loop_nest();
 
     /** Compile to object file and header pair, with the given
      * arguments. */

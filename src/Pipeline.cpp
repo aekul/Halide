@@ -251,6 +251,11 @@ void Pipeline::print_loop_nest() {
     std::cerr << Halide::Internal::print_loop_nest(contents->outputs);
 }
 
+std::string Pipeline::get_loop_nest() {
+    user_assert(defined()) << "Can't print loop nest of undefined Pipeline.\n";
+    return Halide::Internal::print_loop_nest(contents->outputs);
+}
+
 void Pipeline::compile_to_lowered_stmt(const string &filename,
                                        const vector<Argument> &args,
                                        StmtOutputFormat fmt,
