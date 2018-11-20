@@ -54,7 +54,8 @@ $(BIN)/$(ID)/random_pipeline.a $(BIN)/$(ID)/features.json: $(BIN)/random_pipelin
 	$^ -g random_pipeline -o $(BIN)/$(ID) -f random_pipeline \
 		target=$(HL_TARGET)-no_runtime auto_schedule=$(AUTO_SCHEDULE) \
 		seed=$(PIPELINE_SEED) max_stages=$(PIPELINE_STAGES) \
-		2> $(BIN)/$(ID)/stderr.txt > $(BIN)/$(ID)/stdout.txt
+		2>&1 > /dev/null
+		# 2> $(BIN)/$(ID)/stderr.txt > $(BIN)/$(ID)/stdout.txt
 
 # Binary to benchmark one given pipeline
 $(BIN)/$(ID)/benchmark: benchmark.cpp $(BIN)/$(ID)/random_pipeline.a $(BIN)/runtime.a
