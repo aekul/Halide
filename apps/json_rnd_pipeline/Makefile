@@ -1,6 +1,7 @@
 include ../support/Makefile.inc
 
-JSON=$(HALIDE_SRC_PATH)/vendors/include
+# TODO(mgharbi): this is a hack, the vendors header are not part of the distrib
+JSON=$(HALIDE_DISTRIB_PATH)/../vendors/include
 
 PIPELINE_SEED ?=0
 PIPELINE_STAGES ?=20
@@ -18,25 +19,30 @@ endif
 
 # For autoscheduler's python RPC
 ZMQ_LIBS=$(shell pkg-config --libs libzmq)
-LDFLAGS += $(ZMQ_LIBS)
+LDFLAGS += $(ZMQ_LIBS) -lcurses
+CXXFLAGS += -I$(JSON)
 
 all: build
 
 build_shared: $(BIN)/runtime.a
+	@echo CXX $(CXXFLAGS)
 
 build: $(BIN)/$(ID)/benchmark
 
-# Runtime, shared across random pipelines
+# Runtime, shared across all random pipelines
 $(BIN)/runtime.a: $(BIN)/random_pipeline.generator
+	@echo "Building runtime.a"
 	@$^ -r runtime target=$(HL_TARGET) -o $(BIN)
 
-# Common generator
+# Build the Halide generator that generates all the pipelines
 $(BIN)/random_pipeline.generator: random_pipeline_generator.cpp $(GENERATOR_DEPS)
+	@echo "Building random_pipeline.generator"
 	@mkdir -p $(@D)
 	@$(CXX) $(CXXFLAGS) -fno-rtti $(filter-out %.h,$^) \
 		-o $@ $(LDFLAGS) $(HALIDE_SYSTEM_LDFLAGS)
 
-$(BIN)/$(ID)/random_pipeline.a: $(BIN)/random_pipeline.generator
+# One specific pipeline
+$(BIN)/$(ID)/random_pipeline.a $(BIN)/$(ID)/features.json: $(BIN)/random_pipeline.generator
 	@mkdir -p $(@D)
 	@HL_RANDOM_DROPOUT=$(HL_RANDOM_DROPOUT) \
 	HL_SEED=$(HL_SEED) \
@@ -50,16 +56,20 @@ $(BIN)/$(ID)/random_pipeline.a: $(BIN)/random_pipeline.generator
 		seed=$(PIPELINE_SEED) max_stages=$(PIPELINE_STAGES) \
 		2> $(BIN)/$(ID)/stderr.txt > $(BIN)/$(ID)/stdout.txt
 
+# Binary to benchmark one given pipeline
 $(BIN)/$(ID)/benchmark: benchmark.cpp $(BIN)/$(ID)/random_pipeline.a $(BIN)/runtime.a
 	@mkdir -p $(@D)
 	@$(CXX) $(CXXFLAGS) -I$(BIN)/$(ID) -I$(JSON) -Wall -O3 $^ -o $@ $(LDFLAGS)
 
-$(BIN)/$(ID)/timing.json: $(BIN)/$(ID)/benchmark
-	@$^ $@ 2>&1 > /dev/null
+# Benchmarking result file
+$(BIN)/$(ID)/timing.json: $(BIN)/$(ID)/benchmark $(BIN)/$(ID)/features.json
+	@$< $@ 2>&1 > /dev/null
 
+# Target to actually run the benchmark
 bench: $(BIN)/$(ID)/timing.json
 
 clean:
 	@echo Cleaning binaries
 	@rm -rf $(BIN)
 
+# .INTERMEDIATE: $(BIN)/$(ID)/random_pipeline.a $(BIN)/$(ID)/benchmark

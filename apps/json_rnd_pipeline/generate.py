@@ -48,6 +48,7 @@ class GeneratorParams(object):
       "HL_MACHINE_PARAMS": "{},{},{}".format(self.num_cores, self.llc_size, self.balance),
     }
 
+
 def get_pipeline_env(params):
   """Preserves user env, and add pipeline-relevant vars."""
   env = deepcopy(os.environ)
@@ -91,6 +92,7 @@ def get_hl_target(seed="root"):
     return "host"
   else:
     return "host-new_autoscheduler"
+
 
 def main(args):
   print("Building shared binaries")
@@ -255,7 +257,6 @@ def main(args):
               print(r, "failed")
           finally:
             completed += 1
-
 
 
 if __name__ == "__main__":
