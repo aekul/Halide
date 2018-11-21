@@ -1836,6 +1836,23 @@ using NodeMap = PerfectHashMap<FunctionDAG::Node, T>;
 template<typename T>
 using StageMap = PerfectHashMap<FunctionDAG::Node::Stage, T>;
 
+std::string var_base_name(const std::string& name, const std::string& var, int stage_index) {
+    std::string result{name + "." + var + ".min"};
+    if (stage_index > 0) {
+        result += + ".s" + std::to_string(stage_index);
+    }
+    return result;
+};
+
+std::string var_base_name(const std::string& name, const Var& var, int stage_index) {
+    return var_base_name(name, var.name(), stage_index);
+};
+
+std::string var_base_name(Function f, const Var& var, int stage_index) {
+    return var_base_name(f.name(), var.name(), stage_index);
+};
+
+
 // We're going to do a tree search over possible schedules to find an
 // optimal one. A tree search requires a state, and a function that
 // gives you children of the state (with costs). The following struct
@@ -1948,13 +1965,11 @@ struct LoopNest {
         using IRMutator2::visit;
 
         std::map<std::string, Expr>& store_at_bounds;
-        std::map<std::string, Expr>& compute_bounds;
         std::map<std::string, int> strides;
         const NodeMap<int64_t>& inlined;
 
-        ArgReplacer(std::map<std::string, Expr>& store_at_bounds, std::map<std::string, Expr>& compute_bounds, std::map<std::string, int> strides, const NodeMap<int64_t>& inlined)
+        ArgReplacer(std::map<std::string, Expr>& store_at_bounds, std::map<std::string, int> strides, const NodeMap<int64_t>& inlined)
             : store_at_bounds{store_at_bounds}
-            , compute_bounds{compute_bounds}
             , strides{strides}
             , inlined{inlined}
         {}
@@ -1971,22 +1986,29 @@ struct LoopNest {
                 }
             }            
 
-
             if (!is_inlined) {
                 if (op->call_type == Call::PureExtern) {
                   return op;
                 }
-                //if (name == "input") {
-                  //name = "input_im";
-                //}
+
                 std::string name = op->name;
                 vector<Expr> args;
                 for (size_t i = 0; i < new_args.size(); i++) {
-                    std::string key = name + ".v" + std::to_string(i) + ".min";
+                    Expr min;
+                    Expr stride;
 
-                    user_assert(op->call_type == Call::Image || store_at_bounds.count(key) > 0);
-                    Expr min = (op->call_type == Call::Image) ? op->image.min(i) : store_at_bounds.at(key);
-                    Expr stride = (op->call_type == Call::Image) ? op->image.stride(i) : strides[key];
+                    if (op->call_type == Call::Image) {
+                        min = op->image.min(i);
+                        stride = op->image.stride(i);
+                    } else {
+                        std::string key = var_base_name(name, Function(op->func).args()[i], 0);
+                        if (store_at_bounds.count(key) > 0) {
+                            min = store_at_bounds.at(key);
+                            stride = strides[key];
+                        } else {
+                            user_assert(false);
+                        }
+                    }
 
                     Expr arg = new_args[i] - min;
                     arg *= stride;
@@ -2027,18 +2049,20 @@ struct LoopNest {
         return false;
     }
 
-    std::string var_base_name(const std::string& name, int var_index) const {
-        return name + ".v" + std::to_string(var_index) + ".min";
-    };
-
-    std::string var_base_name(Function f, int var_index) const {
-        return var_base_name(f.name(), var_index);
-    };
-
     mutable map<const FunctionDAG::Node *, std::shared_ptr<SymbolicBound>> symbolic_bounds;
 
     struct FuncVars;
     struct ScheduleData;
+
+    struct CollectVars : public IRVisitor {
+        using IRVisitor::visit;
+
+        std::set<std::string> vars;
+
+        void visit(const Variable *var) override {
+            vars.insert(var->name);
+        }
+    };
 
     void create_loop_nest(const FunctionDAG &dag,
                           const MachineParams &params,
@@ -2056,15 +2080,15 @@ struct LoopNest {
                           map<const FunctionDAG::Node::Stage *, LoopNest::FuncVars>& vars_map,
                           LoopNest::ScheduleData& schedule_data) const {
 
-        auto get_var_index = [&](const FuncVars::FuncVar& fv) {
+        auto get_orig_var_name = [&](const FuncVars::FuncVar& fv) {
             const auto &symbolic_loop = stage->loop;
             for (size_t i = 0; i < symbolic_loop.size(); i++) {
                 if (symbolic_loop[i].var == fv.orig.name()) {
-                    return i;
+                    return symbolic_loop[i].var;
                 }
             }
             user_assert(false);
-            return node->func.args().size() - 1;
+            return symbolic_loop.back().var;
         };
 
         auto get_inner_extent = [](const FuncVars& func_vars, int index) -> int64_t {
@@ -2096,11 +2120,19 @@ struct LoopNest {
                 alloc->region.push_back(extent);
                 alloc->size *= extent;
 
-                std::string key = var_base_name(name, j);
-                store_at_bounds[key] = substitute(compute_bounds, symbolic_bound->region_computed[j].first);
+                std::string key = var_base_name(name, f->func.args()[j], 0);
+                store_at_bounds[key] = simplify(substitute(compute_bounds, symbolic_bound->region_computed[j].first));
                 compute_bounds[key] = store_at_bounds[key];
                 strides[key] = stride;
                 stride *= extent;
+            }
+
+            for (int s = 1; s < (int)symbolic_bound->loops.size(); s++) {
+              for (int j = 0; j < (int)symbolic_bound->loops[s].size(); j++) {
+                const auto& loop = f->stages[s].loop[j];
+                std::string key = var_base_name(name, loop.var, s);
+                compute_bounds[key] = simplify(substitute(compute_bounds, symbolic_bound->loops[s][j].first));
+              }
             }
 
             block->add_child(std::move(alloc));
@@ -2124,11 +2156,10 @@ struct LoopNest {
 
         auto add_loop_node = [&](FuncVars& func_vars, int i) {
             const auto& fv = func_vars.vars[i]; 
-            auto var_index = get_var_index(fv);
+            auto var_name = get_orig_var_name(fv);
             int inner_extent = get_inner_extent(func_vars, i);
             std::unique_ptr<LoopNode> loop_node = make_unique<LoopNode>(
                 node->func
-                , var_index
                 , stage_idx
                 , fv.extent
                 , fv.vector_size 
@@ -2140,7 +2171,7 @@ struct LoopNest {
                 , fv.unrolled
             );
 
-            std::string key = var_base_name(node->func, var_index);
+            std::string key = var_base_name(node->func, var_name, stage_idx);
             user_assert(compute_bounds.count(key) > 0);
             compute_bounds[key] = simplify(loop_node->var * IntImm::make(Int(32), inner_extent) + compute_bounds[key]);
 
@@ -2203,26 +2234,39 @@ struct LoopNest {
 
             Expr arg = 0;
             user_assert(def.args().size() > 0);
+
+            CollectVars collect_vars;
+            def.accept(&collect_vars);
+            
+            std::map<std::string, Expr> arg_compute_bounds;
+            for (const auto& var : collect_vars.vars) {
+                std::string key = var_base_name(node->func, var, stage_idx);
+
+                if (compute_bounds.count(key) == 0) {
+                    continue;
+                }
+
+                arg_compute_bounds[var] = compute_bounds[key];
+            }
+
             for (int i = 0, N = def.args().size(); i < N; i++) {
-                std::string key = var_base_name(node->func, i);
                 auto a = node->func.args()[i];
+                std::string store_key = var_base_name(node->func, a, 0);
+
                 // Apply offset to get store location e.g. if x is in [5, 1000],
                 // then x will be stored at [0, 995] so each store should apply
                 // a -5 offset
-                auto store_expr = (compute_bounds[key] - store_at_bounds[key]) * strides[key];
-                arg += substitute(a, store_expr, def.args()[i]);
+                arg += (substitute(arg_compute_bounds, def.args()[i]) - store_at_bounds[store_key]) * strides[store_key];
+
                 arg = simplify(common_subexpression_elimination(arg));
             }
 
-            ArgReplacer replacer{store_at_bounds, compute_bounds, strides, inlined};
+            ArgReplacer replacer{store_at_bounds, strides, inlined};
             // TODO: support tuples
             user_assert(def.values().size() == 1);
             for (auto value : def.values()) {
-                for (int i = 0, N = def.args().size(); i < N; i++) {
-                    std::string key = var_base_name(node->func, i);
-                    auto a = node->func.args()[i];
-                    value = replacer.mutate(substitute(a, compute_bounds[key], value));
-                }
+                value = replacer.mutate(value);
+                value = substitute(arg_compute_bounds, value);
                 values.push_back(simplify(common_subexpression_elimination(value)));
             }
 
@@ -4373,14 +4417,14 @@ std::string generate_schedules_autotune(const std::vector<Function> &output_func
 }
 
 void autoschedule_test() {
-    //MachineParams params(16, 16 * 1024 * 1024, 40);
+    MachineParams params(16, 16 * 1024 * 1024, 40);
     //size_t beam_size = 1;
     // Use a fixed target for the analysis to get consistent results from this test.
-    //Target target("x86-64-linux-sse41-avx-avx2");
+    Target target("x86-64-linux-sse41-avx-avx2");
 
-    //Var x("x"), y("y");
+    Var x("x"), y("y");
 
-    //ThroughputPredictor *tp = nullptr;
+    ThroughputPredictor *tp = nullptr;
     //#if 1
     //ThroughputPredictorPipeline throughput_predictor;
     //ThroughputPredictorPipeline *tpp = &throughput_predictor;
@@ -4587,37 +4631,37 @@ void autoschedule_test() {
         //internal_assert(block.matches_pipeline_loop_nest(outputs));
     //}
 
-    //// A Func with multiple stages, some of which include additional loops
-    //if (1) {
-        //Buffer<float> a(1024, 1024);
-        //Func f("multiple_stages"), g("g"), h("h");
-        //Var x, y;
-        //h(x, y) = pow(x, y);
-        //f(x, y) = a(x, y) * 2;
-        //f(x, y) += 17;
-        //RDom r(0, 10);
-        //f(x, y) += r * h(x, y);
-        //f(x, y) *= 2;
-        //f(0, y) = 23.0f;
-        //g(x, y) = f(x - 1, y - 1) + f(x + 1, y + 1);
+    // A Func with multiple stages, some of which include additional loops
+    if (1) {
+        Buffer<float> a(1024, 1024);
+        Func f("multiple_stages"), g("g"), h("h");
+        Var x, y;
+        h(x, y) = pow(x, y);
+        f(x, y) = a(x, y) * 2;
+        f(x, y) += 17;
+        RDom r(0, 10);
+        f(x, y) += r * h(x, y);
+        f(x, y) *= 2;
+        f(0, y) = 23.0f;
+        g(x, y) = f(x - 1, y - 1) + f(x + 1, y + 1);
 
-        //g.estimate(x, 1, 1022).estimate(y, 1, 1022);
+        g.estimate(x, 1, 1022).estimate(y, 1, 1022);
 
-        //vector<Function> outputs = {g.function()};
-        //FunctionDAG dag(outputs, params, target);
-        //auto optimal = optimal_schedule(dag, outputs, params, tp, 4);
+        vector<Function> outputs = {g.function()};
+        FunctionDAG dag(outputs, params, target);
+        auto optimal = optimal_schedule(dag, outputs, params, tp, 4);
 
-        ////dag.dump();
+        //dag.dump();
 
-        //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
-        //if (tp) tp->join();
-        //optimal->dump();
-        //debug(0) << '\n';
-        //optimal->apply_schedule(params);
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
-    //}
+        debug(0) << "** Optimal schedule:\n";
+        BlockNode block;
+        optimal->calculate_cost(dag, params, tp, block, true);
+        if (tp) tp->join();
+        optimal->dump();
+        debug(0) << '\n';
+        optimal->apply_schedule(params);
+        internal_assert(block.matches_pipeline_loop_nest(outputs));
+    }
 
     //if (1) {
         //// A scan with pointwise stages before and after

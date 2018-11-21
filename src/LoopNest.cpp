@@ -183,11 +183,11 @@ std::vector<std::shared_ptr<PipelineLoop>> ComputeNode::create_pipeline_loop_nes
 }
 
 std::string LoopLevelNode::basic_name(const std::string& name) const {
-  std::regex var_pattern{"([a-zA-Z0-9_]+)(?:\\$[0-9]+)?(.*)"};
+  std::regex var_pattern{"([a-zA-Z0-9_]+)(?:\\.s[0-9]+)?(.*)(?:\\$[0-9]+)?(.*)"};
   std::smatch match;
   std::regex_match(name, match, var_pattern);
-  internal_assert(match.size() == 3);
-  return match[1].str() + match[2].str();
+  internal_assert(match.size() == 4);
+  return match[1].str() + match[2].str() + match[3].str();
 }
 
 std::set<std::string> ComputeNode::get_compute_funcs() const {
@@ -206,11 +206,10 @@ std::string LoopNode::MakeVarName(Function f, int stage_index, int depth, VarOrR
   return var_name.str();
 }
 
-LoopNode::LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled)
+LoopNode::LoopNode(Function f, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled)
   : func{f}
   , var_name{MakeVarName(f, stage_index, depth, var, parallel)}
   , var{Variable::make(Int(32), var_name)}
-  , var_index{var_index}
   , stage_index{stage_index}
   , extent{extent}
   , vector_size{vector_size}
@@ -264,7 +263,6 @@ std::vector<std::shared_ptr<PipelineLoop>> LoopNode::create_pipeline_loop_nest()
   std::shared_ptr<PipelineLoop> l = std::make_shared<PipelineLoop>(
     func.name().substr(0, func.name().find("$"))
     , basic_name(s.str())
-    , stage_index
     , parallel
     , vector_size > 1 
     , unrolled
@@ -309,7 +307,6 @@ std::vector<std::shared_ptr<PipelineLoop>> PipelineLoop::create(const std::vecto
   std::vector<std::pair<std::shared_ptr<PipelineLoop>, int>> loops;
   std::vector<std::shared_ptr<PipelineLoop>> root_loops;
 
-  std::map<std::pair<std::string, std::string>, int> stage;
   std::set<std::string> stored;
 
   std::string var_pattern{"(?:([a-zA-Z0-9_]*)\\.)*([a-zA-Z0-9_]+)(?: in \\[0, ([0-9]+)\\])?:"};
@@ -322,11 +319,8 @@ std::vector<std::shared_ptr<PipelineLoop>> PipelineLoop::create(const std::vecto
   auto create_loop = [&](const std::string& var_name, int depth, bool parallel, bool vectorized, bool unrolled) {
     const auto& func_name = productions.back().first;
     std::pair<std::string, std::string> key{func_name, var_name};
-    if (stage.count(key) == 0) {
-      stage[key] = 0;
-    }
 
-    std::string name{func_name + ".s" + std::to_string(stage[key]) + "." + var_name};
+    std::string name{func_name + "." + var_name};
     if (parallel) {
       name += "_par";
     }
@@ -334,7 +328,6 @@ std::vector<std::shared_ptr<PipelineLoop>> PipelineLoop::create(const std::vecto
     std::shared_ptr<PipelineLoop> l = std::make_shared<PipelineLoop>(
       func_name
       , name 
-      , stage[key]
       , parallel
       , vectorized
       , unrolled
@@ -346,8 +339,6 @@ std::vector<std::shared_ptr<PipelineLoop>> PipelineLoop::create(const std::vecto
       root_loops.push_back(l);
     }
     loops.push_back({l, depth});
-
-    stage[key]++;
   };
 
   for (int i = 0; i < (int)lines.size(); i++) {
@@ -436,6 +427,7 @@ bool PipelineLoop::match(const PipelineLoop& other) {
 
   auto n = other.var_name.find_last_of(".");
   auto other_name = other.var_name.substr(0, n);
+  other_name = other_name.substr(0, other_name.find("$"));
   if (var_name != other_name) {
     return false;
   }

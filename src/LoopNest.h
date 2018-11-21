@@ -24,17 +24,15 @@ using std::map;
 struct PipelineLoop {
   std::string func_name;
   std::string var_name;
-  int stage_index;
   bool parallel;
   bool vectorized;
   bool unrolled;
   std::set<std::string> compute_here; 
   std::set<std::string> store_here; 
 
-  PipelineLoop(const std::string& func_name, const std::string& var_name, int stage_index, bool parallel, bool vectorized, bool unrolled)
+  PipelineLoop(const std::string& func_name, const std::string& var_name, bool parallel, bool vectorized, bool unrolled)
     : func_name{func_name}
     , var_name{var_name}
-    , stage_index{stage_index}
     , parallel{parallel}
     , vectorized{vectorized}
     , unrolled{unrolled}
@@ -127,7 +125,6 @@ struct LoopNode : LoopLevelNode {
   Function func;
   std::string var_name;
   Expr var;
-  int var_index;
   int stage_index;
   int64_t extent;
   int vector_size;
@@ -139,7 +136,7 @@ struct LoopNode : LoopLevelNode {
 
   static std::string MakeVarName(Function f, int stage_index, int depth, VarOrRVar var, bool parallel);
 
-  LoopNode(Function f, int var_index, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled);
+  LoopNode(Function f, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled);
 
   std::vector<std::shared_ptr<PipelineLoop>> create_pipeline_loop_nest() const override;
   void dump(int indent_level = 0) const override;
