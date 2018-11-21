@@ -9,7 +9,6 @@ import os
 import re
 import subprocess
 import time
-import pdb
 
 
 class GeneratorParams(object):
@@ -95,6 +94,15 @@ def get_hl_target(seed="root"):
 
 
 def main(args):
+  results_dir = os.path.abspath(args.results_dir)
+  bin_dir = os.path.join(results_dir, "bin")
+  curdir = os.path.abspath(os.curdir)
+  
+  makedir = os.path.dirname(os.path.abspath(__file__))
+  print(".Changing directory to Makefile root {}".format(makedir))
+  os.chdir(makedir)
+
+
   print(".Building shared binaries")
   subprocess.check_output(["make", "build_shared"])
 
@@ -118,7 +126,7 @@ def main(args):
         for s in schedule_seeds:
           params = GeneratorParams(
             get_hl_target(s), s, pipeline_seed, stages, args.dropout,
-            args.beam_size, args.timeout, args.predictor_url, args.bin_dir,
+            args.beam_size, args.timeout, args.predictor_url, bin_dir,
             args.num_cores, args.llc_size, args.balance, args.use_predictor_server)
           q.put(params, block=True)
       q.join()
@@ -137,7 +145,7 @@ def main(args):
       for s in schedule_seeds:
         params = GeneratorParams(
           get_hl_target(s), s, pipeline_seed, stages, args.dropout,
-          args.beam_size, args.timeout, args.predictor_url, args.bin_dir,
+          args.beam_size, args.timeout, args.predictor_url, bin_dir,
           args.num_cores, args.llc_size, args.balance, args.use_predictor_server)
         env = get_pipeline_env(params)
         env["HL_NUM_THREADS"] = str(args.hl_threads)
@@ -164,8 +172,8 @@ def main(args):
     if args.build_only:
       return
 
-  src = os.path.join(args.bin_dir, get_hl_target())
-  os.makedirs(args.results_dir, exist_ok=True)
+  src = os.path.join(bin_dir, get_hl_target())
+  os.makedirs(results_dir, exist_ok=True)
   path_re = re.compile(r".*pipe(?P<pipe>\d+)")
   seed_re = re.compile("(.*?_seed)(?P<seed>[^_]*)(_.*?)")
   stage_re = re.compile(".*stages(\d+)")
@@ -203,7 +211,7 @@ def main(args):
           except:
             pass
 
-    with open(os.path.join(args.results_dir, "evaluation_report.json"), "w") as fid:
+    with open(os.path.join(results_dir, "evaluation_report.json"), "w") as fid:
       report = {
         "pipeline": pipe_seeds,
         "root_time": root_times,
@@ -250,13 +258,17 @@ def main(args):
               print(r, elapsed, pipe_seed, features["schedule_seed"], features["time"], features["time_root"])
 
             fname = "pipeline_{:03d}_schedule_{:03d}_stages_{}.json".format(pipe_seed, features["schedule_seed"], num_stages)
-            with open(os.path.join(args.results_dir, fname), "w") as fid:
+            with open(os.path.join(results_dir, fname), "w") as fid:
               json.dump(features, fid)
           except:
             if (completed - 1) % 1000 == 0:
               print(r, "failed")
           finally:
             completed += 1
+  print("saving data to {}".format(results_dir))
+
+  print(".Changing directory back to original location {}".format(curdir))
+  os.chdir(curdir)
 
 
 if __name__ == "__main__":
@@ -264,7 +276,6 @@ if __name__ == "__main__":
   parser = argparse.ArgumentParser()
   parser.add_argument("--workers", type=int, default=4)
   parser.add_argument("--results_dir", type=str, default="generated")
-  parser.add_argument("--bin_dir", type=str, default="bin")
 
   parser.add_argument("--evaluate", dest="evaluate", action="store_true", help="evaluate autoscheduler, instead of generating data samples")
   parser.add_argument("--predictor_url", type=str, default="tcp://localhost:5555", help="url of the throughput predictor server, useful when evaluating our predictions")

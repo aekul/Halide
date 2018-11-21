@@ -60,6 +60,7 @@ std::string expr2str(Expr e) {
   s << e;
   return s.str();
 }
+
 // This should be a function f s.t
 // f(0) = 0
 // f(params.last_level_cache_size) = params.balance
@@ -362,7 +363,8 @@ struct FunctionDAG {
             int64_t c_min = 0, c_max = 0;
         };
 
-        void loop_nest_for_region_symbolic(int stage_idx, SymbolicBound* bound) const {
+        void loop_nest_for_region_symbolic(int stage_idx, SymbolicBound* bound) const
+        {
             const auto &s = stages[stage_idx];
             map<string, Expr> computed_map;
             for (int i = 0; i < func.dimensions(); i++) {
@@ -382,7 +384,8 @@ struct FunctionDAG {
         // Get the loop nest shape as a function of the region computed
         void loop_nest_for_region(int stage_idx,
                                   const pair<int64_t, int64_t> *computed,
-                                  pair<int64_t, int64_t> *loop) const {
+                                  pair<int64_t, int64_t> *loop) const
+        {
             // debug(0) << "Loop nest for region func " << func.name() << " stage " << stage_idx << "\n";
             const auto &s = stages[stage_idx];
             map<string, Expr> computed_map;
@@ -682,7 +685,8 @@ struct FunctionDAG {
 
     // Create the function DAG, and do all the dependency and cost
     // analysis. This is done once up-front before the tree search.
-    FunctionDAG(const vector<Function> &outputs, const MachineParams &params, const Target &target) {
+    FunctionDAG(const vector<Function> &outputs, const MachineParams &params, const Target &target)
+    {
         map<string, Function> env;
         for (Function o : outputs) {
             populate_environment(o, env);
@@ -1048,7 +1052,8 @@ struct FunctionDAG {
         featurize();
     }
 
-    class Featurizer : public IRVisitor {
+    class Featurizer : public IRVisitor
+    {
         using IRVisitor::visit;
 
         Function &func;
@@ -1420,6 +1425,7 @@ private:
     FunctionDAG(const FunctionDAG &other) = delete;
     void operator=(const FunctionDAG &other) = delete;
 };  // FunctionDAG
+
 
 vector<vector<int64_t>> generate_tilings(const vector<int64_t> &s, int d, int factor, bool allow_splits, int vector_dim, int vector_size) {
     vector<vector<int64_t>> result;
@@ -3317,16 +3323,18 @@ struct State {
     }
 
 
-    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params, ThroughputPredictor*throughput_predictor, BlockNode& block, bool verbose = false,
-        json *json_dump = nullptr) {
-        NodeMap<const LoopNest *> compute_site, store_site;
-        compute_site.make_large(dag.nodes.size());
-        store_site.make_large(dag.nodes.size());
-        StageMap<ScheduleFeatures> features;
-        features.make_large(dag.nodes[0].stages[0].max_id);
-        internal_assert(root.defined());
-        root->get_compute_sites(compute_site, store_site);
-        root->compute_features(params, compute_site, store_site, 1, 1, nullptr, *root, nullptr, &features);
+    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params,
+                        ThroughputPredictor*throughput_predictor, BlockNode&
+                        block, bool verbose = false, json *json_dump = nullptr)
+    {
+      NodeMap<const LoopNest *> compute_site, store_site;
+      compute_site.make_large(dag.nodes.size());
+      store_site.make_large(dag.nodes.size());
+      StageMap<ScheduleFeatures> features;
+      features.make_large(dag.nodes[0].stages[0].max_id);
+      internal_assert(root.defined());
+      root->get_compute_sites(compute_site, store_site);
+      root->compute_features(params, compute_site, store_site, 1, 1, nullptr, *root, nullptr, &features);
 
         std::map<std::string, Expr> store_at_bounds;
         std::map<std::string, Expr> compute_bounds;
@@ -3345,18 +3353,6 @@ struct State {
 
         // use either deep network or linear model to predict cost
         if (throughput_predictor) {
-            // Perform any quick rejection tests before enqueuing this
-            // TODO: staging of inputs for repeated reuse scenarios (e.g. gemm) triggers this rejection.
-            /*
-            for (auto it = features.begin(); it != features.end(); it++) {
-                auto &feat = it.value();
-                if (feat.points_computed_total + feat.inlined_calls > 10 * feat.points_computed_minimum) {
-                    cost = 1e50;
-                    return true;
-                }
-            }
-            */
-
             // Won't actually run anything until we call evaluate_costs...
             throughput_predictor->enqueue(jdata, &cost);
         } else {
@@ -3550,10 +3546,9 @@ struct State {
 
         }
 
-
         cost_calculations++;
         return true;
-    }
+    }   // calculate cost
 
     IntrusivePtr<State> make_child() const {
         State *s = new State;
