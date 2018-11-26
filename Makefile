@@ -1617,7 +1617,7 @@ $(BIN_DIR)/tutorial_lesson_21_auto_scheduler_run: $(ROOT_DIR)/tutorial/lesson_21
 
 test_internal: $(BIN_DIR)/test_internal
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR) ; $(CURDIR)/$<
+	#cd $(TMP_DIR) ; $(CURDIR)/$<
 	@-echo
 
 correctness_%: $(BIN_DIR)/correctness_%

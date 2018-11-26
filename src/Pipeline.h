@@ -207,6 +207,9 @@ public:
                                  StmtOutputFormat fmt = Text,
                                  const Target &target = get_target_from_environment());
 
+    Module get_compiled_to_lowered_stmt(const std::vector<Argument> &args,
+                                 const Target &target = get_target_from_environment());
+
     /** Write out the loop nests specified by the schedule for this
      * Pipeline's Funcs. Helpful for understanding what a schedule is
      * doing. */

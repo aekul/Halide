@@ -182,12 +182,37 @@ std::vector<std::shared_ptr<PipelineLoop>> ComputeNode::create_pipeline_loop_nes
   return {};
 }
 
-std::string LoopLevelNode::basic_name(const std::string& name) const {
-  std::regex var_pattern{"([a-zA-Z0-9_]+)(?:\\.s[0-9]+)?(.*)(?:\\$[0-9]+)?(.*)"};
+std::string basic_name(std::string name) {
+  std::regex depth_pattern{"(.*)(?:\\.[0-9]+)$"};
   std::smatch match;
-  std::regex_match(name, match, var_pattern);
-  internal_assert(match.size() == 4);
-  return match[1].str() + match[2].str() + match[3].str();
+  if (std::regex_match(name, match, depth_pattern)) {
+    name = match[1].str();
+  }
+
+  std::regex dollar_pattern{"([^$]*)(?:\\$[^.$]*)(.*)"};
+  while (std::regex_match(name, match, dollar_pattern)) {
+    name = match[1].str() + match[2].str();
+  }
+
+  std::regex stage_pattern{"([a-zA-Z0-9_]+)(?:\\.s[0-9]+)?(.*)"};
+  std::regex_match(name, match, stage_pattern);
+  internal_assert(match.size() == 3);
+  return match[1].str() + match[2].str();
+}
+
+void basic_name_test() {
+  internal_assert(basic_name("f") == "f") << basic_name("f");
+  internal_assert(basic_name("f.s0") == "f") << basic_name("f.s0");
+  internal_assert(basic_name("f.s0.1") == "f") << basic_name("f.s0.1");
+  internal_assert(basic_name("f.s0.x.1") == "f.x") << basic_name("f.s0.x.1");
+  internal_assert(basic_name("f.s0.x$18.1") == "f.x") << basic_name("f.s0.x$18.1");
+  internal_assert(basic_name("f$2.s0.x$18.1") == "f.x") << basic_name("f$2.s0.x$18.1");
+  internal_assert(basic_name("f.x.1") == "f.x") << basic_name("f.x.1");
+  internal_assert(basic_name("f.x.10") == "f.x") << basic_name("f.x.10");
+  internal_assert(basic_name("f.x_inner.10") == "f.x_inner") << basic_name("f.x_inner.10");
+  internal_assert(basic_name("f.x$3.10") == "f.x") << basic_name("f.x$3.10");
+  internal_assert(basic_name("f.x.x_inner.1") == "f.x.x_inner") << basic_name("f.x.x_inner.1");
+  internal_assert(basic_name("f.r96463$x") == "f.r96463") << basic_name("f.r96463");
 }
 
 std::set<std::string> ComputeNode::get_compute_funcs() const {
@@ -277,7 +302,11 @@ std::vector<std::shared_ptr<PipelineLoop>> LoopNode::create_pipeline_loop_nest()
 
 void PipelineLoop::print(int depth) {
   std::cout << std::string(2 * depth, ' ');
-  std::cout << var_name;
+  std::cout << "for " << var_name;
+  if (min.defined() && extent.defined()) {
+    std::cout << " in [" << min << ", " << extent << "]";
+  }
+
   if (parallel) {
     std::cout << " parallel";
   }
@@ -299,6 +328,11 @@ void PipelineLoop::print(int depth) {
   for (const auto& c : compute_here) {
     std::cout << std::string(2 * (depth + 1), ' ');
     std::cout << "compute " << c << "\n";
+  }
+
+  for (const auto& c : compute_here_) {
+    std::cout << std::string(2 * (depth + 1), ' ');
+    std::cout << c.func << "[" << c.index << "] = " << c.value << "\n";
   }
 }
 
@@ -414,6 +448,7 @@ std::vector<std::shared_ptr<PipelineLoop>> PipelineLoop::create(const std::vecto
 
 bool PipelineLoop::match(const PipelineLoop& other) {
   if (func_name != other.func_name) {
+    internal_assert(false) << func_name << " " << other.func_name << "\n";
     return false;
   }
 
@@ -425,10 +460,9 @@ bool PipelineLoop::match(const PipelineLoop& other) {
     return false;
   }
 
-  auto n = other.var_name.find_last_of(".");
-  auto other_name = other.var_name.substr(0, n);
-  other_name = other_name.substr(0, other_name.find("$"));
+  auto other_name = basic_name(other.var_name);
   if (var_name != other_name) {
+    internal_assert(false) << var_name << " " << other_name << "\n";
     return false;
   }
 
@@ -449,7 +483,7 @@ bool PipelineLoop::match(const PipelineLoop& other) {
   return true;
 }
 
-bool BlockNode::matches_pipeline_loop_nest(const std::vector<Function> &outputs) {
+bool LoopNestRoot::matches_pipeline_loop_nest(const std::vector<Function> &outputs) {
   std::string loop_nest;
   for (const auto& f : outputs) {
     loop_nest += Func(f).get_loop_nest();
@@ -462,11 +496,20 @@ bool BlockNode::matches_pipeline_loop_nest(const std::vector<Function> &outputs)
     lines.push_back(line);
   }
 
-  const auto& root_loops = PipelineLoop::create(lines);
-  const auto& block_loops = create_pipeline_loop_nest();
-  std::cout << "pipeline: \n";
+  std::cout << "loop nest: \n";
+  dump();
 
-  for (const auto& l : root_loops) {
+  std::vector<std::shared_ptr<PipelineLoop>> lowered_loops = get_lowered_loops(outputs);
+  std::cout << "\nlowered: \n";
+  for (const auto& l : lowered_loops) {
+    l->print();
+  }
+
+  const auto& pipeline_loops = PipelineLoop::create(lines);
+  const auto& block_loops = block.create_pipeline_loop_nest();
+
+  std::cout << "pipeline: \n";
+  for (const auto& l : pipeline_loops) {
     l->print();
   }
 
@@ -475,17 +518,70 @@ bool BlockNode::matches_pipeline_loop_nest(const std::vector<Function> &outputs)
     l->print();
   }
 
-  if (root_loops.size() != block_loops.size()) {
+  if (pipeline_loops.size() != block_loops.size()) {
     return false;
   }
 
-  for (int i = 0; i < (int)root_loops.size(); i++) {
-    if (!root_loops[i]->match(*block_loops[i])) {
+  for (int i = 0; i < (int)pipeline_loops.size(); i++) {
+    if (!pipeline_loops[i]->match(*block_loops[i])) {
       return false;
     }
   }
 
   return true;
+}
+
+std::vector<std::shared_ptr<PipelineLoop>> LoopNestRoot::get_lowered_loops(const std::vector<Function> &outputs) {
+  std::vector<std::shared_ptr<PipelineLoop>> lowered_loops;
+
+  for (const auto& f : outputs) {
+    Module m = Func(f).get_compiled_to_lowered_stmt({});
+    LoweredFuncToLoopNest lf_to_loop_nest{output_sizes};
+    
+    auto name = f.name();
+    auto n = name.find("$");
+    if (n != std::string::npos) {
+      name.replace(n, 1, "_");
+    }
+    m.get_function_by_name(name).body.accept(&lf_to_loop_nest);
+    for (const auto& l : lf_to_loop_nest.root_loops) {
+      lowered_loops.push_back(l);
+    }
+  }
+
+  return lowered_loops;
+}
+
+bool LoopNestRoot::matches_lowered_loop_nest(const std::vector<Function> &outputs) {
+  std::vector<std::shared_ptr<PipelineLoop>> lowered_loops = get_lowered_loops(outputs);
+
+  const auto& block_loops = block.create_pipeline_loop_nest();
+
+  std::cout << "lowered: \n";
+  for (const auto& l : lowered_loops) {
+    l->print();
+  }
+
+  std::cout << "\nblock: \n";
+  for (const auto& l : block_loops) {
+    l->print();
+  }
+
+  if (lowered_loops.size() != block_loops.size()) {
+    return false;
+  }
+
+  for (int i = 0; i < (int)lowered_loops.size(); i++) {
+    if (!lowered_loops[i]->match(*block_loops[i])) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void LoopNestRoot::dump() const {
+  block.dump();
 }
 
 } // namespace Internal

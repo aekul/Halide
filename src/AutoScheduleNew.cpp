@@ -1974,6 +1974,38 @@ struct LoopNest {
             , inlined{inlined}
         {}
 
+        Expr create_new_call(const Call *op, const vector<Expr>& new_args) {
+            std::string name = op->name;
+            vector<Expr> args;
+            for (size_t i = 0; i < new_args.size(); i++) {
+                Expr min;
+                Expr stride;
+
+                if (op->call_type == Call::Image) {
+                    min = op->image.min(i);
+                    stride = op->image.stride(i);
+                } else {
+                    std::string key = var_base_name(name, Function(op->func).args()[i], 0);
+                    if (store_at_bounds.count(key) > 0) {
+                        min = store_at_bounds.at(key);
+                        stride = strides[key];
+                    } else {
+                        user_assert(false);
+                    }
+                }
+
+                Expr arg = new_args[i] - min;
+                arg *= stride;
+
+                if (args.empty()) {
+                  args.push_back(arg);
+                } else {
+                  args[0] = simplify(common_subexpression_elimination(arg + args[0]));
+                }
+            }
+            return Call::make(op->type, op->name, args, op->call_type, op->func, op->value_index, op->image, op->param);
+        };
+
         Expr visit(const Call *op) override {
             vector<Expr> new_args = op->args;
 
@@ -1991,35 +2023,11 @@ struct LoopNest {
                   return op;
                 }
 
-                std::string name = op->name;
-                vector<Expr> args;
-                for (size_t i = 0; i < new_args.size(); i++) {
-                    Expr min;
-                    Expr stride;
+                return create_new_call(op, new_args);
+            }
 
-                    if (op->call_type == Call::Image) {
-                        min = op->image.min(i);
-                        stride = op->image.stride(i);
-                    } else {
-                        std::string key = var_base_name(name, Function(op->func).args()[i], 0);
-                        if (store_at_bounds.count(key) > 0) {
-                            min = store_at_bounds.at(key);
-                            stride = strides[key];
-                        } else {
-                            user_assert(false);
-                        }
-                    }
-
-                    Expr arg = new_args[i] - min;
-                    arg *= stride;
-
-                    if (args.empty()) {
-                      args.push_back(arg);
-                    } else {
-                      args[0] = simplify(common_subexpression_elimination(arg + args[0]));
-                    }
-                }
-                return Call::make(op->type, op->name, args, op->call_type, op->func, op->value_index, op->image, op->param);
+            if (op->call_type == Call::Image) {
+                return create_new_call(op, new_args);
             }
 
             Function f{op->func};
@@ -2078,7 +2086,8 @@ struct LoopNest {
                           double num_cores,
                           const StageMap<ScheduleFeatures>& features,
                           map<const FunctionDAG::Node::Stage *, LoopNest::FuncVars>& vars_map,
-                          LoopNest::ScheduleData& schedule_data) const {
+                          LoopNest::ScheduleData& schedule_data,
+                          std::map<std::string, OutputSize>& output_sizes) const {
 
         auto get_orig_var_name = [&](const FuncVars::FuncVar& fv) {
             const auto &symbolic_loop = stage->loop;
@@ -2124,6 +2133,17 @@ struct LoopNest {
                 store_at_bounds[key] = simplify(substitute(compute_bounds, symbolic_bound->region_computed[j].first));
                 compute_bounds[key] = store_at_bounds[key];
                 strides[key] = stride;
+
+                if (f->is_output) {
+                  const auto& func_name = f->func.name();
+                  if (output_sizes.count(func_name) == 0) {
+                    output_sizes.emplace(std::make_pair(func_name, f->func));
+                  }
+                  const int64_t *imin = as_const_int(compute_bounds[key]);
+                  internal_assert(imin) << compute_bounds[key] << "\n";
+                  output_sizes[func_name].add(stride, *imin, extent);
+                }
+
                 stride *= extent;
             }
 
@@ -2215,7 +2235,7 @@ struct LoopNest {
         } 
 
         for (int i = children.size() - 1; i >= 0; i--) {
-            children[i]->create_loop_nest(dag, params, this, indent_level, depth + 1, node_depth + 1, block, store_at_bounds, compute_bounds, strides, parallelism, num_cores, features, vars_map, schedule_data);
+            children[i]->create_loop_nest(dag, params, this, indent_level, depth + 1, node_depth + 1, block, store_at_bounds, compute_bounds, strides, parallelism, num_cores, features, vars_map, schedule_data, output_sizes);
         }
 
         if (innermost) {
@@ -3368,7 +3388,7 @@ struct State {
     }
 
 
-    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params, ThroughputPredictor*throughput_predictor, BlockNode& block, bool verbose = false,
+    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params, ThroughputPredictor*throughput_predictor, LoopNestRoot& loop_nest, bool verbose = false,
         json *json_dump = nullptr) {
         NodeMap<const LoopNest *> compute_site, store_site;
         compute_site.make_large(dag.nodes.size());
@@ -3385,8 +3405,8 @@ struct State {
         std::map<std::string, double> parallelism;
 
         auto vars_and_schedule_data = apply_schedule(params, true);
-        root->create_loop_nest(dag, params, nullptr, 0, 0, 0, &block, store_at_bounds, compute_bounds, strides, parallelism, params.parallelism, features, vars_and_schedule_data.first, vars_and_schedule_data.second);
-        json jdata = block.to_json();
+        root->create_loop_nest(dag, params, nullptr, 0, 0, 0, &loop_nest.block, store_at_bounds, compute_bounds, strides, parallelism, params.parallelism, features, vars_and_schedule_data.first, vars_and_schedule_data.second, loop_nest.output_sizes);
+        json jdata = loop_nest.block.to_json();
 
         if (json_dump) {
             (*json_dump)["features"] = jdata;
@@ -3658,8 +3678,8 @@ struct State {
                 child->root = new_root;
                 child->num_funcs_scheduled++;
                 // TODO: filter children here instead of calculating the cost of children we don't want.
-                BlockNode block;
-                if (child->calculate_cost(dag, params, throughput_predictor, block)) {
+                LoopNestRoot loop_nest;
+                if (child->calculate_cost(dag, params, throughput_predictor, loop_nest)) {
                     internal_assert(child->root->computes(node)) << "Failed to inline " << node->func.name() << '\n';
                     num_children++;
                     accept_child(std::move(child));
@@ -3676,8 +3696,8 @@ struct State {
                 auto child = make_child();
                 child->root = std::move(n);
                 child->num_funcs_scheduled++;
-                BlockNode block;
-                if (child->calculate_cost(dag, params, throughput_predictor, block)) {
+                LoopNestRoot loop_nest;
+                if (child->calculate_cost(dag, params, throughput_predictor, loop_nest)) {
                     internal_assert(child->root->computes(node)) << "Failed to inject realization of " << node->func.name() << '\n';
                     num_children++;
                     accept_child(std::move(child));
@@ -3727,6 +3747,7 @@ struct State {
                 if (!obtain_loop_nest_only) {
                     stage.parallel(it->var);
                 }
+                it->unrolled = false;
                 // Stop at a sufficient number of tasks (TODO: Make this a tiling level in the search space instead).
                 if (parallel_tasks > params.parallelism * 8) {
                     parallelism_exhausted = true;
@@ -4163,15 +4184,17 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
     string json_path = get_env_variable("HL_JSON_DUMP");
 
     // Just to dump the json features
-    BlockNode block;
+    LoopNestRoot loop_nest;
     if (json_path.empty()) {  // do not store json dump
-      optimal->calculate_cost(dag, params, tp, block, true, nullptr);
+      optimal->calculate_cost(dag, params, tp, loop_nest, true, nullptr);
     } else {
-      optimal->calculate_cost(dag, params, tp, block, true, &jdata);
+      optimal->calculate_cost(dag, params, tp, loop_nest, true, &jdata);
     }
 
     // Apply the schedules
     optimal->apply_schedule(params);
+    loop_nest.dump();
+    loop_nest.matches_pipeline_loop_nest(outputs);
     
     // Print out the predicted runtime of each Func, so we can compare them to a profile
     // optimal->print_predicted_runtimes(params);
@@ -4418,7 +4441,7 @@ std::string generate_schedules_autotune(const std::vector<Function> &output_func
 
 void autoschedule_test() {
     MachineParams params(16, 16 * 1024 * 1024, 40);
-    //size_t beam_size = 1;
+    size_t beam_size = 1;
     // Use a fixed target for the analysis to get consistent results from this test.
     Target target("x86-64-linux-sse41-avx-avx2");
 
@@ -4431,205 +4454,205 @@ void autoschedule_test() {
     //#else
     //ThroughputPredictorPipeline *tpp = nullptr;
     //#endif
-    //if (1) {
-        //// In a point-wise pipeline, everything should be fully fused.
-        //Func f("f"), g("g"), h("h");
-        //f(x, y) = (x + y) * (x + y);
-        //g(x, y) = f(x, y) * 2 + 1;
-        //h(x, y) = g(x, y) * 2 + 1;
+    if (1) {
+        // In a point-wise pipeline, everything should be fully fused.
+        Func f("f"), g("g"), h("h");
+        f(x, y) = (x + y) * (x + y);
+        g(x, y) = f(x, y) * 2 + 1;
+        h(x, y) = g(x, y) * 2 + 1;
 
-        //h.estimate(x, 0, 1000).estimate(y, 0, 1000);
+        h.estimate(x, 0, 1000).estimate(y, 0, 1000);
 
-        //vector<Function> outputs = {h.function()};
-        //FunctionDAG dag(outputs, params, target);
+        vector<Function> outputs = {h.function()};
+        FunctionDAG dag(outputs, params, target);
 
-        //auto optimal = optimal_schedule(dag, outputs, params, tp, 8); //beam_size);
+        auto optimal = optimal_schedule(dag, outputs, params, tp, 8); //beam_size);
 
-        //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
-        //if (tp) tp->join();
-        //optimal->dump();
-        //debug(0) << '\n';
+        debug(0) << "** Optimal schedule:\n";
+        LoopNestRoot loop_nest;
+        optimal->calculate_cost(dag, params, tp, loop_nest, true);
+        if (tp) tp->join();
+        optimal->dump();
+        debug(0) << '\n';
 
-        //optimal->apply_schedule(params);
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
-        //// h.realize(1000, 1000);
+        optimal->apply_schedule(params);
+        internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
+        // h.realize(1000, 1000);
 
-    //}
+    }
 
-    //if (1) {
-        //// In a pipeline with huge expensive stencils and low memory costs, nothing should be fused
-        //Func f("f"), g("g"), h("h");
-        //f(x, y) = (x + y) * (x + 2*y) * (x + 3*y) * (x + 4*y) * (x + 5*y);
-        //Expr e = 0;
-        //for (int i = 0; i < 100; i++) {
-            //e += f(x + i*10, y + i*10);
-        //}
-        //g(x, y) = e;
-        //e = 0;
-        //for (int i = 0; i < 100; i++) {
-            //e += g(x + i*10, y + i*10);
-        //}
-        //h(x, y) = e;
+    if (1) {
+        // In a pipeline with huge expensive stencils and low memory costs, nothing should be fused
+        Func f("f"), g("g"), h("h");
+        f(x, y) = (x + y) * (x + 2*y) * (x + 3*y) * (x + 4*y) * (x + 5*y);
+        Expr e = 0;
+        for (int i = 0; i < 100; i++) {
+            e += f(x + i*10, y + i*10);
+        }
+        g(x, y) = e;
+        e = 0;
+        for (int i = 0; i < 100; i++) {
+            e += g(x + i*10, y + i*10);
+        }
+        h(x, y) = e;
 
-        //h.estimate(x, 0, 1000).estimate(y, 0, 1000);
+        h.estimate(x, 0, 1000).estimate(y, 0, 1000);
 
-        //MachineParams cheap_memory = params;
-        //cheap_memory.balance = 1;
+        MachineParams cheap_memory = params;
+        cheap_memory.balance = 1;
 
-        //vector<Function> outputs = {h.function()};
-        //FunctionDAG dag(outputs, cheap_memory, target);
-        //auto optimal = optimal_schedule(dag, outputs, cheap_memory, tp, beam_size);
+        vector<Function> outputs = {h.function()};
+        FunctionDAG dag(outputs, cheap_memory, target);
+        auto optimal = optimal_schedule(dag, outputs, cheap_memory, tp, beam_size);
 
-        //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
-        //if (tp) tp->join();
-        //optimal->dump();
-        //debug(0) << '\n';
+        debug(0) << "** Optimal schedule:\n";
+        LoopNestRoot loop_nest;
+        optimal->calculate_cost(dag, params, tp, loop_nest, true);
+        if (tp) tp->join();
+        optimal->dump();
+        debug(0) << '\n';
 
-        //optimal->apply_schedule(params);
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
-        //// h.realize(1000, 1000);
-    //}
+        optimal->apply_schedule(params);
+        internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
+        // h.realize(1000, 1000);
+    }
 
-    //if (1) {
-        //// In a pipeline with moderate isotropic stencils, there should be some square tiling
-        //Func f("f"), h("h");
-        //f(x, y) = (x + y) * (x + 2*y) * (x + 3*y);
-        //h(x, y) = (f(x-9, y-9) + f(x, y-9) + f(x+9, y-9) +
-                   //f(x-9, y  ) + f(x, y  ) + f(x+9, y  ) +
-                   //f(x-9, y+9) + f(x, y+9) + f(x+9, y-9));
+    if (1) {
+        // In a pipeline with moderate isotropic stencils, there should be some square tiling
+        Func f("f"), h("h");
+        f(x, y) = (x + y) * (x + 2*y) * (x + 3*y);
+        h(x, y) = (f(x-9, y-9) + f(x, y-9) + f(x+9, y-9) +
+                   f(x-9, y  ) + f(x, y  ) + f(x+9, y  ) +
+                   f(x-9, y+9) + f(x, y+9) + f(x+9, y-9));
 
 
-        //h.estimate(x, 0, 2048).estimate(y, 0, 2048);
+        h.estimate(x, 0, 2048).estimate(y, 0, 2048);
 
-        //vector<Function> outputs = {h.function()};
-        //FunctionDAG dag(outputs, params, target);
-        //auto optimal = optimal_schedule(dag, outputs, params, tp, beam_size);
+        vector<Function> outputs = {h.function()};
+        FunctionDAG dag(outputs, params, target);
+        auto optimal = optimal_schedule(dag, outputs, params, tp, beam_size);
 
-        //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
-        //if (tp) tp->join();
-        //optimal->dump();
-        //debug(0) << '\n';
+        debug(0) << "** Optimal schedule:\n";
+        LoopNestRoot loop_nest;
+        optimal->calculate_cost(dag, params, tp, loop_nest, true);
+        if (tp) tp->join();
+        optimal->dump();
+        debug(0) << '\n';
 
-        //optimal->apply_schedule(params);
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
-        //// h.realize(2048, 2048);
-    //}
+        optimal->apply_schedule(params);
+        internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
+        // h.realize(2048, 2048);
+    }
 
-    //// Smaller footprint stencil -> smaller tiles
-    //if (1) {
-        //Func f("f"), g("g"), h("h");
-        //f(x, y) = (x + y) * (x + 2*y) * (x + 3*y);
-        //h(x, y) = (f(x-1, y-1) + f(x, y-1) + f(x+1, y-1) +
-                   //f(x-1, y  ) + f(x, y  ) + f(x+1, y  ) +
-                   //f(x-1, y+1) + f(x, y+1) + f(x+1, y-1));
+    // Smaller footprint stencil -> smaller tiles
+    if (1) {
+        Func f("f"), g("g"), h("h");
+        f(x, y) = (x + y) * (x + 2*y) * (x + 3*y);
+        h(x, y) = (f(x-1, y-1) + f(x, y-1) + f(x+1, y-1) +
+                   f(x-1, y  ) + f(x, y  ) + f(x+1, y  ) +
+                   f(x-1, y+1) + f(x, y+1) + f(x+1, y-1));
 
-        //h.estimate(x, 0, 2048).estimate(y, 0, 2048);
+        h.estimate(x, 0, 2048).estimate(y, 0, 2048);
 
-        //vector<Function> outputs = {h.function()};
-        //FunctionDAG dag(outputs, params, target);
-        //auto optimal = optimal_schedule(dag, outputs, params, tp, beam_size);
+        vector<Function> outputs = {h.function()};
+        FunctionDAG dag(outputs, params, target);
+        auto optimal = optimal_schedule(dag, outputs, params, tp, beam_size);
 
-        //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
-        //if (tp) tp->join();
-        //optimal->dump();
-        //debug(0) << '\n';
+        debug(0) << "** Optimal schedule:\n";
+        LoopNestRoot loop_nest;
+        optimal->calculate_cost(dag, params, tp, loop_nest, true);
+        if (tp) tp->join();
+        optimal->dump();
+        debug(0) << '\n';
 
-        //optimal->apply_schedule(params);
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
-        //// h.realize(2048, 2048);
+        optimal->apply_schedule(params);
+        internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
+        // h.realize(2048, 2048);
 
-        //// optimal->print_predicted_runtimes(dag, params);
-    //}
+        // optimal->print_predicted_runtimes(dag, params);
+    }
 
     // A stencil chain
-    //if (1) {
-        //const int N = 8;
-        //Func f[N];
-        //f[0](x, y) = (x + y) * (x + 2*y) * (x + 3*y);
-        //for (int i = 1; i < N; i++) {
-            //Expr e = 0;
-            //for (int dy = -2; dy <= 2; dy++) {
-                //for (int dx = -2; dx <= 2; dx++) {
-                    //e += f[i-1](x + dx, y + dy);
-                //}
-            //}
-            //f[i](x, y) = e;
-        //}
-        //f[N-1].estimate(x, 0, 2048).estimate(y, 0, 2048);
-        //vector<Function> outputs = {f[N-1].function()};
-        //FunctionDAG dag(outputs, params, target);
-        //auto optimal = optimal_schedule(dag, outputs, params, tp, 1);
-        //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
-        //if (tp) tp->join();
-        //optimal->dump();
-        //debug(0) << '\n';
+    if (1) {
+        const int N = 8;
+        Func f[N];
+        f[0](x, y) = (x + y) * (x + 2*y) * (x + 3*y);
+        for (int i = 1; i < N; i++) {
+            Expr e = 0;
+            for (int dy = -2; dy <= 2; dy++) {
+                for (int dx = -2; dx <= 2; dx++) {
+                    e += f[i-1](x + dx, y + dy);
+                }
+            }
+            f[i](x, y) = e;
+        }
+        f[N-1].estimate(x, 0, 2048).estimate(y, 0, 2048);
+        vector<Function> outputs = {f[N-1].function()};
+        FunctionDAG dag(outputs, params, target);
+        auto optimal = optimal_schedule(dag, outputs, params, tp, 1);
+        debug(0) << "** Optimal schedule:\n";
+        LoopNestRoot loop_nest;
+        optimal->calculate_cost(dag, params, tp, loop_nest, true);
+        if (tp) tp->join();
+        optimal->dump();
+        debug(0) << '\n';
 
-        ////optimal->apply_schedule(params);
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
-        //// f[N-1].realize(2048, 2048);
-    //}
+        //optimal->apply_schedule(params);
+        internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
+        // f[N-1].realize(2048, 2048);
+    }
 
     // An outer product
-    //if (1) {
-        //Buffer<float> a(2048), b(2048);
-        //Func f;
-        //f(x, y) = a(x) * b(y);
+    if (1) {
+        Buffer<float> a(2048), b(2048);
+        Func f;
+        f(x, y) = a(x) * b(y);
 
-        //f.estimate(x, 0, 2048).estimate(y, 0, 2048);
+        f.estimate(x, 0, 2048).estimate(y, 0, 2048);
 
-        //vector<Function> outputs = {f.function()};
-        //FunctionDAG dag(outputs, params, target);
-        //auto optimal = optimal_schedule(dag, outputs, params, tp, beam_size);
+        vector<Function> outputs = {f.function()};
+        FunctionDAG dag(outputs, params, target);
+        auto optimal = optimal_schedule(dag, outputs, params, tp, beam_size);
 
-        //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
-        //if (tp) tp->join();
-        //optimal->dump();
-        //debug(0) << '\n';
-        //optimal->apply_schedule(params);
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
-    //}
+        debug(0) << "** Optimal schedule:\n";
+        LoopNestRoot loop_nest;
+        optimal->calculate_cost(dag, params, tp, loop_nest, true);
+        if (tp) tp->join();
+        optimal->dump();
+        debug(0) << '\n';
+        optimal->apply_schedule(params);
+        internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
+    }
 
-    //// A separable downsample that models the start of local_laplacian
-    //if (1) {
-        //Buffer<float> in(2048, 2048);
-        //Var k;
-        //Func orig("orig"), expensive("expensive"), downy("downy"), downx("downx");
-        //Expr e = 0;
-        //for (int i = 0; i < 100; i++) {
-            //e += 1;
-            //e *= e;
-        //}
-        //orig(x, y) = e;
-        //expensive(x, y, k) = orig(x, y) * orig(x, y) + (x + orig(x, y)) * (1 + orig(x, y)) + sqrt(k + orig(x, y));
-        //downy(x, y, k) = expensive(x, 2*y - 1, k) + expensive(x, 2*y, k) + expensive(x, 2*y+1, k) + expensive(x, 2*y + 2, k);
-        //downx(x, y, k) = downy(2*x-1, y, k) + downy(2*x, y, k) + downy(2*x + 1, y, k) + downy(2*x + 2, y, k);
-        //downx.estimate(x, 1, 1022).estimate(y, 1, 1022).estimate(k, 0, 256);
+    // A separable downsample that models the start of local_laplacian
+    if (1) {
+        Buffer<float> in(2048, 2048);
+        Var k;
+        Func orig("orig"), expensive("expensive"), downy("downy"), downx("downx");
+        Expr e = 0;
+        for (int i = 0; i < 100; i++) {
+            e += 1;
+            e *= e;
+        }
+        orig(x, y) = e;
+        expensive(x, y, k) = orig(x, y) * orig(x, y) + (x + orig(x, y)) * (1 + orig(x, y)) + sqrt(k + orig(x, y));
+        downy(x, y, k) = expensive(x, 2*y - 1, k) + expensive(x, 2*y, k) + expensive(x, 2*y+1, k) + expensive(x, 2*y + 2, k);
+        downx(x, y, k) = downy(2*x-1, y, k) + downy(2*x, y, k) + downy(2*x + 1, y, k) + downy(2*x + 2, y, k);
+        downx.estimate(x, 1, 1022).estimate(y, 1, 1022).estimate(k, 0, 256);
 
-        //vector<Function> outputs = {downx.function()};
-        //FunctionDAG dag(outputs, params, target);
-        //auto optimal = optimal_schedule(dag, outputs, params, tp, 1);
+        vector<Function> outputs = {downx.function()};
+        FunctionDAG dag(outputs, params, target);
+        auto optimal = optimal_schedule(dag, outputs, params, tp, 1);
 
-        //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
-        //if (tp) tp->join();
-        //optimal->dump();
-        //debug(0) << '\n';
-        //optimal->apply_schedule(params);
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
-    //}
+        debug(0) << "** Optimal schedule:\n";
+        LoopNestRoot loop_nest;
+        optimal->calculate_cost(dag, params, tp, loop_nest, true);
+        if (tp) tp->join();
+        optimal->dump();
+        debug(0) << '\n';
+        optimal->apply_schedule(params);
+        internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
+    }
 
     // A Func with multiple stages, some of which include additional loops
     if (1) {
@@ -4654,13 +4677,13 @@ void autoschedule_test() {
         //dag.dump();
 
         debug(0) << "** Optimal schedule:\n";
-        BlockNode block;
-        optimal->calculate_cost(dag, params, tp, block, true);
+        LoopNestRoot loop_nest;
+        optimal->calculate_cost(dag, params, tp, loop_nest, true);
         if (tp) tp->join();
         optimal->dump();
         debug(0) << '\n';
         optimal->apply_schedule(params);
-        internal_assert(block.matches_pipeline_loop_nest(outputs));
+        internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
     }
 
     //if (1) {
@@ -4690,78 +4713,78 @@ void autoschedule_test() {
         //auto optimal = optimal_schedule(dag, outputs, params, tp, 1);
 
         //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
+        //LoopNestRoot loop_nest;
+        //optimal->calculate_cost(dag, params, tp, loop_nest, true);
         //if (tp) tp->join();
         //optimal->dump();
         //debug(0) << '\n';
         //optimal->apply_schedule(params);
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
+        //internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
     //}
 
 
-    //if (1) {
-        //Func f_u8("f_u8");
-        //Func f_u64_1("f_u64_1");
-        //Func f_u64_2("f_u64_2");
-        //Buffer<uint8_t> a(1024 * 1024 + 2);
+    if (1) {
+        Func f_u8("f_u8");
+        Func f_u64_1("f_u64_1");
+        Func f_u64_2("f_u64_2");
+        Buffer<uint8_t> a(1024 * 1024 + 2);
 
-        //Var x;
-        //f_u8(x) = (min(a(x) + 1, 17) * a(x+1) + a(x+2)) * a(x) * a(x) * a(x + 1) * a(x + 1);
-        //f_u64_1(x) = cast<uint64_t>(f_u8(x)) + 1;
-        //f_u64_2(x) = f_u64_1(x) * 3;
+        Var x;
+        f_u8(x) = (min(a(x) + 1, 17) * a(x+1) + a(x+2)) * a(x) * a(x) * a(x + 1) * a(x + 1);
+        f_u64_1(x) = cast<uint64_t>(f_u8(x)) + 1;
+        f_u64_2(x) = f_u64_1(x) * 3;
 
-        //// Ignoring the types, it would make sense to inline
-        //// everything into f_64_2 but this would vectorize fairly
-        //// narrowly, which is a waste of work for the first Func.
+        // Ignoring the types, it would make sense to inline
+        // everything into f_64_2 but this would vectorize fairly
+        // narrowly, which is a waste of work for the first Func.
 
-        //f_u64_2.estimate(x, 0, 1024 * 1024);
+        f_u64_2.estimate(x, 0, 1024 * 1024);
 
-        //vector<Function> outputs = {f_u64_2.function()};
-        //FunctionDAG dag(outputs, params, target);
-        ////dag.dump();
-        //auto optimal = optimal_schedule(dag, outputs, params, tp, 1);
+        vector<Function> outputs = {f_u64_2.function()};
+        FunctionDAG dag(outputs, params, target);
+        //dag.dump();
+        auto optimal = optimal_schedule(dag, outputs, params, tp, 1);
 
-        //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
-        //if (tp) tp->join();
-        //optimal->dump();
-        //debug(0) << '\n';
-        //optimal->apply_schedule(params);
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
-    //}
+        debug(0) << "** Optimal schedule:\n";
+        LoopNestRoot loop_nest;
+        optimal->calculate_cost(dag, params, tp, loop_nest, true);
+        if (tp) tp->join();
+        optimal->dump();
+        debug(0) << '\n';
+        optimal->apply_schedule(params);
+        internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
+    }
 
-    //if (1) {
-        //Buffer<float> im_a(1024, 1024, "a"), im_b(1024, 1024, "b");
-        //im_a.fill(0.0f);
-        //im_b.fill(0.0f);
+    if (1) {
+        Buffer<float> im_a(1024, 1024, "a"), im_b(1024, 1024, "b");
+        im_a.fill(0.0f);
+        im_b.fill(0.0f);
 
-        //Func c("c"), a("a"), b("b");
-        //Var i, j;
-        //a(j, i) = im_a(j, i);  // TODO: Add wrappers to the search space
-        //b(j, i) = im_b(j, i);
-        //RDom k(0, 1024);
-        //c(j, i) += a(k, i) * b(j, k);
-        //Func out("out");
-        //out(j, i) = c(j, i);
+        Func c("c"), a("a"), b("b");
+        Var i, j;
+        a(j, i) = im_a(j, i);  // TODO: Add wrappers to the search space
+        b(j, i) = im_b(j, i);
+        RDom k(0, 1024);
+        c(j, i) += a(k, i) * b(j, k);
+        Func out("out");
+        out(j, i) = c(j, i);
 
-        //out.estimate(j, 0, 1024).estimate(i, 0, 1024);
+        out.estimate(j, 0, 1024).estimate(i, 0, 1024);
 
-        //vector<Function> outputs = {out.function()};
-        //FunctionDAG dag(outputs, params, target);
-        ////dag.dump();
-        //auto optimal = optimal_schedule(dag, outputs, params, tp, 1);
+        vector<Function> outputs = {out.function()};
+        FunctionDAG dag(outputs, params, target);
+        //dag.dump();
+        auto optimal = optimal_schedule(dag, outputs, params, tp, 1);
 
-        //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
-        //if (tp) tp->join();
-        //optimal->dump();
-        //debug(0) << '\n';
-        //optimal->apply_schedule(params);
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
-    //}
+        debug(0) << "** Optimal schedule:\n";
+        LoopNestRoot loop_nest;
+        optimal->calculate_cost(dag, params, tp, loop_nest, true);
+        if (tp) tp->join();
+        optimal->dump();
+        debug(0) << '\n';
+        optimal->apply_schedule(params);
+        internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
+    }
 
     //if (1) {
         //// A scan in x followed by a downsample in y, with pointwise stuff in between
@@ -4809,44 +4832,44 @@ void autoschedule_test() {
         //auto optimal = optimal_schedule(dag, outputs, params, tp, 50);
 
         //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
+        //LoopNestRoot loop_nest;
+        //optimal->calculate_cost(dag, params, tp, loop_nest, true);
         //if (tp) tp->join();
         //optimal->dump();
         //debug(0) << "Time: " << t << " seconds\n";
         //debug(0) << "Time per schedule considered: " << (1000000 * t) / cost_calcs << " us\n";
         //optimal->apply_schedule(params);
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
+        //internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
     //}
 
-    //if (1) {
-        //// A gather that only uses a small portion of a potentially
-        //// large LUT. The number of points computed should be less
-        //// than points computed minimum, and the LUT should be
-        //// inlined, even if it's really expensive.
-        //Func lut("lut");
-        //Var x;
-        //lut(x) = (x + 1) * (x + 2) * (x + 3) * (x + 4) * (x + 5) * (x + 6);
+    if (1) {
+        // A gather that only uses a small portion of a potentially
+        // large LUT. The number of points computed should be less
+        // than points computed minimum, and the LUT should be
+        // inlined, even if it's really expensive.
+        Func lut("lut");
+        Var x;
+        lut(x) = (x + 1) * (x + 2) * (x + 3) * (x + 4) * (x + 5) * (x + 6);
 
-        //Func idx("idx");
-        //idx(x) = x * (10000 - x);
+        Func idx("idx");
+        idx(x) = x * (10000 - x);
 
-        //Func out("out");
-        //out(x) = lut(clamp(idx(x), 0, 100000));
+        Func out("out");
+        out(x) = lut(clamp(idx(x), 0, 100000));
 
-        //out.estimate(x, 0, 10);
+        out.estimate(x, 0, 10);
 
-        //vector<Function> outputs = {out.function()};
-        //FunctionDAG dag(outputs, params, target);
-        //auto optimal = optimal_schedule(dag, outputs, params, tp, 50);
-        //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
-        //if (tp) tp->join();
-        //optimal->dump();
-        //optimal->apply_schedule(params);
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
-    //}
+        vector<Function> outputs = {out.function()};
+        FunctionDAG dag(outputs, params, target);
+        auto optimal = optimal_schedule(dag, outputs, params, tp, 50);
+        debug(0) << "** Optimal schedule:\n";
+        LoopNestRoot loop_nest;
+        optimal->calculate_cost(dag, params, tp, loop_nest, true);
+        if (tp) tp->join();
+        optimal->dump();
+        optimal->apply_schedule(params);
+        internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
+    }
 
     //// Autotune a small-footprint convolution. Disabled by default because this test does not currently terminate.
     ////if (0) {
@@ -4878,29 +4901,29 @@ void autoschedule_test() {
         ////generate_schedules_autotune({f[N-1].function()}, target, params);
     ////}
 
-    //if (1) {
-        //// Compute_at a split rvar
-        //Func f("f"), g("g");
-        //f(x, y) = x;
-        //f(x, y) += 1;
+    if (1) {
+        // Compute_at a split rvar
+        Func f("f"), g("g");
+        f(x, y) = x;
+        f(x, y) += 1;
 
-        //RDom r(0, 100);
-        //g(x, y) = 0;
-        //g(x, y) += f(x, 1000*(y+r));
+        RDom r(0, 100);
+        g(x, y) = 0;
+        g(x, y) += f(x, 1000*(y+r));
 
-        //g.estimate(x, 0, 1000).estimate(y, 0, 1000);
+        g.estimate(x, 0, 1000).estimate(y, 0, 1000);
 
-        //vector<Function> outputs = {g.function()};
-        //FunctionDAG dag(outputs, params, target);
-        //auto optimal = optimal_schedule(dag, outputs, params, tp, 10);
-        //debug(0) << "** Optimal schedule:\n";
-        //BlockNode block;
-        //optimal->calculate_cost(dag, params, tp, block, true);
-        //if (tp) tp->join();
-        //optimal->dump();
-        //internal_assert(block.matches_pipeline_loop_nest(outputs));
+        vector<Function> outputs = {g.function()};
+        FunctionDAG dag(outputs, params, target);
+        auto optimal = optimal_schedule(dag, outputs, params, tp, 10);
+        debug(0) << "** Optimal schedule:\n";
+        LoopNestRoot loop_nest;
+        optimal->calculate_cost(dag, params, tp, loop_nest, true);
+        if (tp) tp->join();
+        optimal->dump();
+        internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
 
-    //}
+    }
 }
 
 } // namespace Internal

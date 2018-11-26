@@ -2997,6 +2997,11 @@ void Func::compile_to_lowered_stmt(const string &filename,
     pipeline().compile_to_lowered_stmt(filename, args, fmt, target);
 }
 
+Module Func::get_compiled_to_lowered_stmt(const vector<Argument> &args,
+                                   const Target &target) {
+    return pipeline().get_compiled_to_lowered_stmt(args, target);
+}
+
 void Func::compile_to_python_extension(const string &filename_prefix,
                                        const vector<Argument> &args,
                                        const string &fn_name,

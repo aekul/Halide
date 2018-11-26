@@ -270,6 +270,11 @@ void Pipeline::compile_to_lowered_stmt(const string &filename,
     m.compile(outputs);
 }
 
+Module Pipeline::get_compiled_to_lowered_stmt(const vector<Argument> &args,
+                                       const Target &target) {
+    return compile_to_module(args, "", target);
+}
+
 void Pipeline::compile_to_static_library(const string &filename_prefix,
                                          const vector<Argument> &args,
                                          const std::string &fn_name,
