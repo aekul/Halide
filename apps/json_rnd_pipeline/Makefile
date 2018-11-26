@@ -42,7 +42,7 @@ $(BIN)/random_pipeline.generator: random_pipeline_generator.cpp $(GENERATOR_DEPS
 		-o $@ $(LDFLAGS) $(HALIDE_SYSTEM_LDFLAGS)
 
 # One specific pipeline
-$(BIN)/$(ID)/random_pipeline.a $(BIN)/$(ID)/features.json: $(BIN)/random_pipeline.generator
+$(BIN)/$(ID)/random_pipeline.a $(BIN)/$(ID)/features.msgpack: $(BIN)/random_pipeline.generator
 	@mkdir -p $(@D)
 	@HL_RANDOM_DROPOUT=$(HL_RANDOM_DROPOUT) \
 	HL_SEED=$(HL_SEED) \
@@ -63,7 +63,7 @@ $(BIN)/$(ID)/benchmark: benchmark.cpp $(BIN)/$(ID)/random_pipeline.a $(BIN)/runt
 	@$(CXX) $(CXXFLAGS) -I$(BIN)/$(ID) -I$(JSON) -Wall -O3 $^ -o $@ $(LDFLAGS)
 
 # Benchmarking result file
-$(BIN)/$(ID)/timing.json: $(BIN)/$(ID)/benchmark $(BIN)/$(ID)/features.json
+$(BIN)/$(ID)/timing.json: $(BIN)/$(ID)/benchmark $(BIN)/$(ID)/features.msgpack
 	@$< $@ 2>&1 > /dev/null
 
 # Target to actually run the benchmark
