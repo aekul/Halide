@@ -49,6 +49,7 @@ class GeneratorParams(object):
       "HL_MACHINE_PARAMS": "{},{},{}".format(self.num_cores, self.llc_size, self.balance),
     }
 
+
 def get_pipeline_env(params):
   """Preserves user env, and add pipeline-relevant vars."""
   env = deepcopy(os.environ)
@@ -93,8 +94,9 @@ def get_hl_target(seed="root"):
   else:
     return "host-new_autoscheduler"
 
+
 def main(args):
-  print("Building shared binaries")
+  print(".Building shared binaries")
   subprocess.check_output(["make", "build_shared"])
 
   if args.evaluate:
@@ -110,7 +112,7 @@ def main(args):
   if not args.gather_only:
     # Distributed build
     if not args.bench_only:
-      print("\nBuilding pipelines")
+      print(".Building pipelines")
       for p in range(args.pipelines):
         pipeline_seed = args.node_id + (p * args.num_nodes)
         stages = (p % 30) + 2  # number of stages for that pipeline
@@ -127,7 +129,7 @@ def main(args):
 
     # Sequential benchmarking
     total = args.pipelines * len(schedule_seeds)
-    print("\nBenchmarking pipelines: {} total".format(total))
+    print(".Benchmarking pipelines: {} total".format(total))
     completed = 0
     benchmark_start = time.time()
     for p in range(args.pipelines):
@@ -146,19 +148,19 @@ def main(args):
           subprocess.check_output(["make", "bench"], env=env, timeout=params.timeout)
           # numactl --cpunodebind=0 make bench
           elapsed = time.time() - start
-          print("Benchmarking {} took {:.2f}s".format(params, elapsed))
+          print("  .Benchmarking {} took {:.2f}s".format(params, elapsed))
           completed += 1
         except subprocess.CalledProcessError as e:
           for k in env:
             print("{}={} \\".format(k, env[k]))
-          print("Benchmarking {} errored: {}s".format(params, e))
+          print("  .Benchmarking {} errored: {}s".format(params, e))
         except subprocess.TimeoutExpired:
-          print("Benchmarking {} timed out at {:.2f}s".format(params, params.timeout))
+          print("  .Benchmarking {} timed out at {:.2f}s".format(params, params.timeout))
 
-        if completed % 1000 == 0:
+        if completed % 100 == 0:
           m, s = divmod(int(time.time() - benchmark_start), 60)
           h, m = divmod(m, 60)
-          print("Benchmarked {} / {} in {:02d}h:{:02d}m:{:02d}s".format(completed, total, h, m, s))
+          print(".Benchmarked {} / {} in {:02d}h:{:02d}m:{:02d}s".format(completed, total, h, m, s))
 
     if args.build_only:
       return
@@ -257,7 +259,6 @@ def main(args):
               print(r, "failed")
           finally:
             completed += 1
-
 
 
 if __name__ == "__main__":
