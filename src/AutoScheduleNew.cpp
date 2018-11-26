@@ -1981,11 +1981,14 @@ struct LoopNest {
                 Expr min;
                 Expr stride;
 
-                if (op->call_type == Call::Image) {
+                if (op->call_type == Call::Image && op->image.defined()) {
                     min = op->image.min(i);
                     stride = op->image.stride(i);
                 } else {
-                    std::string key = var_base_name(name, Function(op->func).args()[i], 0);
+                    // Input images may not have a defined func (their args
+                    // should be _0, _1, _2, etc.)
+                    std::string var_name = op->func.defined() ? Function(op->func).args()[i] : "_" + std::to_string(i);
+                    std::string key = var_base_name(name, var_name, 0);
                     if (store_at_bounds.count(key) > 0) {
                         min = store_at_bounds.at(key);
                         stride = strides[key];
@@ -4194,19 +4197,16 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
     // Apply the schedules
     optimal->apply_schedule(params);
     loop_nest.dump();
-    loop_nest.matches_pipeline_loop_nest(outputs);
     
     // Print out the predicted runtime of each Func, so we can compare them to a profile
     // optimal->print_predicted_runtimes(params);
 
     if (!json_path.empty()) {
-        // jdata["features"] = jfeatures;
         jdata["optimal_schedule"] = optimal->json_dump();
         jdata["optimal_schedule"]["cost_evaluations"] = State::cost_calculations;
-        // debug(0) << "Dumping json to " << json_path << "\n";
-        std::ofstream json_file(json_path);
-        json_file << jdata << std::endl;
-        // json_file << std::setw(2) << jdata << std::endl;
+        std::ofstream json_file(json_path, std::ios::binary);
+        std::vector<std::uint8_t> msgpack_data = json::to_msgpack(jdata);
+        json_file.write(reinterpret_cast<char*>(msgpack_data.data()), msgpack_data.size() * sizeof(std::uint8_t));
     }
     if (tp) {
       delete tp;
