@@ -3,7 +3,7 @@
 
 import argparse
 from copy import deepcopy
-import json
+import msgpack
 from multiprocessing import Process, Queue, Pool, JoinableQueue
 import os
 import re
@@ -185,8 +185,8 @@ def main(args):
     new_times = []
     for r, dd, ff in os.walk(src):
       for f in ff:
-        if f == "features.json":
-          f = "timing.json"
+        if f == "features.msgpack":
+          f = "timing.mp"
           match = path_re.match(r)
           pipe_seed = int(match.group("pipe"))
           root_path = re.sub(seed_re, "\g<1>root\g<3>", r)
@@ -195,13 +195,13 @@ def main(args):
 
           try:
             with open(os.path.join(r, f), "r") as fid:
-              new_time = json.load(fid)["time"]
+              new_time = msgpack.load(fid)["time"]
 
             with open(os.path.join(root_path, f), "r") as fid:
-              root_time = json.load(fid)["time"]
+              root_time = msgpack.load(fid)["time"]
 
             with open(os.path.join(master_path, f), "r") as fid:
-              master_time = json.load(fid)["time"]
+              master_time = msgpack.load(fid)["time"]
 
             pipe_seeds.append(pipe_seed)
             root_times.append(root_time)
@@ -211,14 +211,14 @@ def main(args):
           except:
             pass
 
-    with open(os.path.join(results_dir, "evaluation_report.json"), "w") as fid:
+    with open(os.path.join(results_dir, "evaluation_report.mp"), "w") as fid:
       report = {
         "pipeline": pipe_seeds,
         "root_time": root_times,
         "master_time": master_times,
         "new_time": new_times,
       }
-      json.dump(report, fid)
+      msgpack.dump(report, fid)
 
   else:
     # Gather training dataset
@@ -227,7 +227,7 @@ def main(args):
     gather_start = time.time()
     for r, dd, ff in os.walk(src):
       for f in ff:
-        if f == "features.json":
+        if f == "features.mp":
           start = time.time()
           # extract pipe seed 
           match = path_re.match(r)
@@ -238,28 +238,29 @@ def main(args):
 
           try:
             feats = os.path.join(r, f)
-            with open(feats, "r") as fid:
-              features = json.load(fid)
+            with open(feats, "rb") as fid:
+              features = msgpack.load(fid)
             times = feats.replace("features", "timing")
             with open(times, "r") as fid:
-              timing = json.load(fid)
-            times_root = os.path.join(root_path, "timing.json")
-            with open(times_root, "r") as fid:
-              timing_root = json.load(fid)
+              timing = msgpack.load(fid)
 
-            features["pipeline_seed"] = pipe_seed
-            features["time"] = timing["time"]
-            features["time_root"] = timing_root["time"]
+            times_root = os.path.join(root_path, "timing.mp")
+            with open(times_root, "r") as fid:
+              timing_root = msgpack.load(fid)
+
+            features[b"pipeline_seed"] = pipe_seed
+            features[b"time"] = timing["time"]
+            features[b"time_root"] = timing_root["time"]
 
             elapsed = time.time() - start
             if (completed - 1) % 1000 == 0:
               m, s = divmod(int(time.time() - gather_start), 60)
               h, m = divmod(m, 60)
-              print(r, elapsed, pipe_seed, features["schedule_seed"], features["time"], features["time_root"])
+              print(r, elapsed, pipe_seed, features[b"schedule_seed"], features[b"time"], features[b"time_root"])
 
-            fname = "pipeline_{:03d}_schedule_{:03d}_stages_{}.json".format(pipe_seed, features["schedule_seed"], num_stages)
-            with open(os.path.join(results_dir, fname), "w") as fid:
-              json.dump(features, fid)
+            fname = "pipeline_{:03d}_schedule_{:03d}_stages_{}.msgpack".format(pipe_seed, features[b"schedule_seed"], num_stages)
+            with open(os.path.join(args.results_dir, fname), "wb") as fid:
+              msgpack.dump(features, fid)
           except:
             if (completed - 1) % 1000 == 0:
               print(r, "failed")

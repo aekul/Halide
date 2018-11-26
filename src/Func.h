@@ -884,6 +884,9 @@ public:
                                  StmtOutputFormat fmt = Text,
                                  const Target &target = get_target_from_environment());
 
+    Module get_compiled_to_lowered_stmt(const std::vector<Argument> &args,
+                                 const Target &target = get_target_from_environment());
+
     /** Emit a Python Extension glue .c file. */
     void compile_to_python_extension(const std::string &filename_prefix,
                                      const std::vector<Argument> &args,
@@ -894,6 +897,7 @@ public:
      * Function. Helpful for understanding what a schedule is
      * doing. */
     void print_loop_nest();
+    std::string get_loop_nest();
 
     /** Compile to object file and header pair, with the given
      * arguments. The name defaults to the same name as this halide

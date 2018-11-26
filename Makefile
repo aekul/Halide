@@ -847,7 +847,7 @@ BUILTIN_RUNTIME_TARGET = host
 UNAME_M = $(shell uname -m)
 ifeq ($(UNAME_M), x86_64)
 # We may want to compile libHalide on one x86 platform and use it on another (e.g. for distributions)
-BUILTIN_PIPELINE_TARGET = x86-64-avx2-no_runtime,x86-64-avx-no_runtime,x86-64-no_runtime
+BUILTIN_PIPELINE_TARGET = x86-64-avx2-no_runtime #x86-64-avx2-no_runtime,x86-64-avx-no_runtime,x86-64-no_runtime
 BUILTIN_RUNTIME_TARGET = x86-64
 endif
 
@@ -1617,7 +1617,7 @@ $(BIN_DIR)/tutorial_lesson_21_auto_scheduler_run: $(ROOT_DIR)/tutorial/lesson_21
 
 test_internal: $(BIN_DIR)/test_internal
 	@-mkdir -p $(TMP_DIR)
-	cd $(TMP_DIR) ; $(CURDIR)/$<
+	#cd $(TMP_DIR) ; $(CURDIR)/$<
 	@-echo
 
 correctness_%: $(BIN_DIR)/correctness_%
