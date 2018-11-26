@@ -82,6 +82,26 @@ struct PipelineLoop {
 
 std::string basic_name(std::string name);
 void basic_name_test();
+
+template <typename T>
+std::vector<double> log2_one_plus(const std::vector<T>& input) {
+  std::vector<double> result;
+  result.reserve(input.size());
+  for (const auto& x : input) {
+    result.push_back(std::log2(1 + x));
+  }
+  return result;
+}
+
+template <typename T>
+std::vector<double> log2(const std::vector<T>& input) {
+  std::vector<double> result;
+  result.reserve(input.size());
+  for (const auto& x : input) {
+    result.push_back(std::log2(x));
+  }
+  return result;
+}
   
 struct LoopNode;
 struct BlockNode;

@@ -28,8 +28,14 @@ json AllocNode::to_json() const {
   jdata["type"] = "alloc";
   jdata["name"] = name;
   jdata["size"] = size;
+  jdata["log2_size"] = std::log2(size);
   jdata["region"] = region;
+  auto log2_region = log2(region);
+  jdata["log2_region"] = log2(region);
   jdata["bytes_per_point"] = bytes_per_point;
+  jdata["log2_bytes_per_point"] = std::log2(bytes_per_point);
+  jdata["size_bytes_per_point"] = size * bytes_per_point;
+  jdata["log2_size_bytes_per_point"] = std::log2(size * bytes_per_point);
   jdata["should_store_on_stack"] = should_store_on_stack;
   return jdata;
 }
@@ -167,14 +173,16 @@ json ComputeNode::to_json() const {
   jdata["name"] = func.name();
   jdata["loop_nest_pipeline_features"] = features.json_dump();
   jdata["pipeline_features"] = pipeline_features.json_dump();
-  jdata["schedule_features"] = schedule_features.json_dump();
-  jdata["store_jacobian"] = store_jacobian.to_json();
-  for (const auto& j : load_jacobians) {
-    jdata["load_jacobians"].push_back({
-      {"name", j.first}
-      , {"jacobian", j.second.to_json()}
-    });
-  }
+  auto schedule_features_vector = schedule_features.to_vector();
+  jdata["schedule_features"] = schedule_features_vector;
+  jdata["log2_schedule_features"] = log2_one_plus(schedule_features_vector);
+  //jdata["store_jacobian"] = store_jacobian.to_json();
+  //for (const auto& j : load_jacobians) {
+    //jdata["load_jacobians"].push_back({
+      //{"name", j.first}
+      //, {"jacobian", j.second.to_json()}
+    //});
+  //}
   return jdata;
 }
 
@@ -269,7 +277,9 @@ json LoopNode::to_json() const {
   s << var;
   jdata["var"] = s.str();
   jdata["extent"] = extent;
+  jdata["log2_extent"] = std::log2(extent);
   jdata["vector_size"] = vector_size;
+  jdata["log2_vector_size"] = std::log2(vector_size);
   jdata["parallel"] = parallel;
   jdata["unrolled"] = unrolled;
   jdata["block"] = body->to_json();

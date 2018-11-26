@@ -3335,14 +3335,14 @@ struct LoopNest {
                             if (parent.var.is_rvar || (stage_idx != 0 && !parent.outermost)) {
                                 tail_strategy = TailStrategy::GuardWithIf;
                             }
-                            debug(0) << "Splitting " << node->func.name()
-                                     << ".s" << stage_idx
-                                     << "." << parent.var.name()
-                                     << " = " << outer.name()
-                                     << " * " << factor
-                                     << " + " << inner.name()
-                                     << " using " << tail_strategy << "\n";
                             if (!obtain_loop_nest_only) {
+                                debug(0) << "Splitting " << node->func.name()
+                                         << ".s" << stage_idx
+                                         << "." << parent.var.name()
+                                         << " = " << outer.name()
+                                         << " * " << factor
+                                         << " + " << inner.name()
+                                         << " using " << tail_strategy << "\n";
                                 s.split(parent.var, outer, inner, (int)factor, tail_strategy);
                             }
                             v = parent;

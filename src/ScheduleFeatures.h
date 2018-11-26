@@ -120,6 +120,37 @@ struct ScheduleFeatures {
                  << "    total_cost:                            " << total_cost << '\n';
     }
 
+    std::vector<int64_t> to_vector() const {
+        return {
+            num_realizations,
+            num_productions,
+            points_computed_per_realization,
+            points_computed_per_production,
+            points_computed_total,
+            points_computed_minimum,
+            innermost_loop_extent,
+            innermost_pure_loop_extent,
+            inner_parallelism,
+            outer_parallelism,
+            bytes_at_realization,
+            bytes_at_production,
+            bytes_at_root,
+            innermost_bytes_at_realization,
+            innermost_bytes_at_production,
+            innermost_bytes_at_root,
+            bytes_read_per_tile,
+            inlined_calls,
+            unique_bytes_read_per_realization,
+            unique_lines_read_per_realization,
+            allocation_bytes_read_per_realization,
+            working_set,
+            vector_size,
+            rounded_innermost_pure_loop_extent,
+            native_vector_size,
+            non_unique_bytes_read_per_realization
+        };
+    }
+
     json json_dump(bool as_vector=true) const {
         json jdata;
         if (as_vector) {
@@ -149,6 +180,8 @@ struct ScheduleFeatures {
                 vector_size,
                 rounded_innermost_pure_loop_extent,
                 native_vector_size,
+                non_unique_bytes_read_per_realization,
+
                 total_element_compute_cost,
                 compute_cost_inlined, 
                 vector_overcompute_factor,
@@ -193,6 +226,7 @@ struct ScheduleFeatures {
             jdata["vector_size"]                           = vector_size;
             jdata["rounded_innermost_pure_loop_extent"]    = rounded_innermost_pure_loop_extent;
             jdata["native_vector_size"]                    = native_vector_size;
+            jdata["non_unique_bytes_read_per_realization"] = non_unique_bytes_read_per_realization;
             jdata["total_element_compute_cost"] = total_element_compute_cost;
             jdata["compute_cost_inlined"] = compute_cost_inlined;
             jdata["vector_overcompute_factor"] = vector_overcompute_factor;
