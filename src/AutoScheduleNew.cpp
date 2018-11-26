@@ -3423,7 +3423,15 @@ struct State {
         return h;
     }
 
-<<<<<<< HEAD
+    void compute_featurization(const FunctionDAG &dag, const MachineParams &params, StageMap<ScheduleFeatures> *features) {
+        NodeMap<const LoopNest *> compute_site, store_site;
+        compute_site.make_large(dag.nodes.size());
+        store_site.make_large(dag.nodes.size());
+        features->make_large(dag.nodes[0].stages[0].max_id);
+        internal_assert(root.defined());
+        root->get_compute_sites(compute_site, store_site);
+        root->compute_features(params, compute_site, store_site, 1, 1, nullptr, *root, nullptr, features);
+    }
 
     void save_featurization(const FunctionDAG &dag, const MachineParams &params, const std::string &feature_file) {
         StageMap<ScheduleFeatures> features;
