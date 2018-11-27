@@ -62,6 +62,7 @@ std::string expr2str(Expr e) {
   s << e;
   return s.str();
 }
+
 // This should be a function f s.t
 // f(0) = 0
 // f(params.last_level_cache_size) = params.balance
@@ -364,7 +365,8 @@ struct FunctionDAG {
             int64_t c_min = 0, c_max = 0;
         };
 
-        void loop_nest_for_region_symbolic(int stage_idx, SymbolicBound* bound) const {
+        void loop_nest_for_region_symbolic(int stage_idx, SymbolicBound* bound) const
+        {
             const auto &s = stages[stage_idx];
             map<string, Expr> computed_map;
             for (int i = 0; i < func.dimensions(); i++) {
@@ -384,7 +386,8 @@ struct FunctionDAG {
         // Get the loop nest shape as a function of the region computed
         void loop_nest_for_region(int stage_idx,
                                   const pair<int64_t, int64_t> *computed,
-                                  pair<int64_t, int64_t> *loop) const {
+                                  pair<int64_t, int64_t> *loop) const
+        {
             // debug(0) << "Loop nest for region func " << func.name() << " stage " << stage_idx << "\n";
             const auto &s = stages[stage_idx];
             map<string, Expr> computed_map;
@@ -684,7 +687,8 @@ struct FunctionDAG {
 
     // Create the function DAG, and do all the dependency and cost
     // analysis. This is done once up-front before the tree search.
-    FunctionDAG(const vector<Function> &outputs, const MachineParams &params, const Target &target) {
+    FunctionDAG(const vector<Function> &outputs, const MachineParams &params, const Target &target)
+    {
         map<string, Function> env;
         for (Function o : outputs) {
             populate_environment(o, env);
@@ -1046,7 +1050,8 @@ struct FunctionDAG {
         featurize();
     }
 
-    class Featurizer : public IRVisitor {
+    class Featurizer : public IRVisitor
+    {
         using IRVisitor::visit;
 
         Function &func;
@@ -1418,6 +1423,7 @@ private:
     FunctionDAG(const FunctionDAG &other) = delete;
     void operator=(const FunctionDAG &other) = delete;
 };  // FunctionDAG
+
 
 vector<vector<int64_t>> generate_tilings(const vector<int64_t> &s, int d, int factor, bool allow_splits, int vector_dim, int vector_size) {
     vector<vector<int64_t>> result;
@@ -3469,7 +3475,35 @@ struct State {
         binfile.close();
     }
 
-    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params, ThroughputPredictor*throughput_predictor, LoopNestRoot& loop_nest, bool verbose = false, json *json_dump = nullptr) {
+    std::vector<json> dump_featurization(const FunctionDAG &dag, const StageMap<ScheduleFeatures> s_features) {
+      std::vector<json> stage_features;
+      for(const auto &n: dag.nodes) {
+        // TODO(mgharbi): break or error if pipeline is not schedule yet.
+        for(size_t stage_idx = n.stages.size(); stage_idx > 0; stage_idx--) {
+          const auto &s = n.stages[stage_idx - 1];
+          auto sched_feat = s_features.get(&s);
+          const int64_t *sched_stats = (const int64_t *)(&sched_feat);
+          const int *pipe_stats = (const int *)(&s.features);
+
+          json jstage;
+          jstage["name"] = n.func.name();
+          jstage["stage_idx"] = stage_idx - 1;
+          jstage["schedule"] = std::vector<int64_t>(
+                      sched_stats,
+                      sched_stats+sizeof(ScheduleFeatures) / sizeof(int64_t));
+            jstage["pipeline"] = std::vector<int>(
+                      pipe_stats,
+                      pipe_stats+sizeof(s.features) / sizeof(int));
+          stage_features.push_back(jstage);
+
+        }
+      }
+      return stage_features;
+    }  // dump_featurization
+
+    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params,
+                        ThroughputPredictor*throughput_predictor, LoopNestRoot&
+                        loop_nest, bool verbose = false, json *json_dump = nullptr) {
         StageMap<ScheduleFeatures> features;
         compute_featurization(dag, params, &features);
 
@@ -3479,8 +3513,16 @@ struct State {
         std::map<std::string, double> parallelism;
 
         auto vars_and_schedule_data = apply_schedule(params, true);
-        root->create_loop_nest(dag, params, nullptr, 0, 0, 0, &loop_nest.block, store_at_bounds, compute_bounds, strides, parallelism, params.parallelism, features, vars_and_schedule_data.first, vars_and_schedule_data.second, loop_nest.output_sizes);
-        json jdata = loop_nest.block.to_json();
+
+        root->create_loop_nest(dag, params, nullptr, 0, 0, 0, &loop_nest.block,
+            store_at_bounds, compute_bounds, strides, parallelism,
+            params.parallelism, features, vars_and_schedule_data.first,
+            vars_and_schedule_data.second, loop_nest.output_sizes);
+
+        json jdata;
+        std::vector<json> stage_dump = dump_featurization(dag, features);
+        jdata["loop"] = loop_nest.block.to_json();
+        jdata["stage"] = stage_dump;
 
         if (json_dump) {
             (*json_dump)["features"] = jdata;
@@ -3702,10 +3744,9 @@ struct State {
 
         }
 
-
         cost_calculations++;
         return true;
-    }
+    }   // calculate cost
 
     IntrusivePtr<State> make_child() const {
         State *s = new State;

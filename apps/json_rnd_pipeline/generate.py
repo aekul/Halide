@@ -3,14 +3,12 @@
 
 import argparse
 from copy import deepcopy
-import json
 import msgpack
 from multiprocessing import Process, Queue, Pool, JoinableQueue
 import os
 import re
 import subprocess
 import time
-import pdb
 
 
 class GeneratorParams(object):
@@ -71,10 +69,10 @@ def build_one(q):
       subprocess.check_output(["make", "build"], env=env, timeout=params.timeout)
       elapsed = time.time() - start
       count += 1
+      print("pid {} {}, compiled in {:.2f}s".format(os.getpid(), params, elapsed))
+      m, s = divmod(int(time.time() - compile_start), 60)
+      h, m = divmod(m, 60)
       if count % 25 == 0:
-        print("pid {} {}, compiled in {:.2f}s".format(os.getpid(), params, elapsed))
-        m, s = divmod(int(time.time() - compile_start), 60)
-        h, m = divmod(m, 60)
         print("Compiled {} programs in {:02d}h:{:02d}m:{:02d}s".format(count, h, m, s))
     except subprocess.TimeoutExpired:
       print("pid {} {}, timed out over {:.2f}s".format(os.getpid(), params, params.timeout))
@@ -96,6 +94,15 @@ def get_hl_target(seed="root"):
 
 
 def main(args):
+  results_dir = os.path.abspath(args.results_dir)
+  bin_dir = os.path.join(results_dir, "bin")
+  curdir = os.path.abspath(os.curdir)
+  
+  makedir = os.path.dirname(os.path.abspath(__file__))
+  print(".Changing directory to Makefile root {}".format(makedir))
+  os.chdir(makedir)
+
+
   print(".Building shared binaries")
   subprocess.check_output(["make", "build_shared"])
 
@@ -119,7 +126,7 @@ def main(args):
         for s in schedule_seeds:
           params = GeneratorParams(
             get_hl_target(s), s, pipeline_seed, stages, args.dropout,
-            args.beam_size, args.timeout, args.predictor_url, args.bin_dir,
+            args.beam_size, args.timeout, args.predictor_url, bin_dir,
             args.num_cores, args.llc_size, args.balance, args.use_predictor_server)
           q.put(params, block=True)
       q.join()
@@ -138,7 +145,7 @@ def main(args):
       for s in schedule_seeds:
         params = GeneratorParams(
           get_hl_target(s), s, pipeline_seed, stages, args.dropout,
-          args.beam_size, args.timeout, args.predictor_url, args.bin_dir,
+          args.beam_size, args.timeout, args.predictor_url, bin_dir,
           args.num_cores, args.llc_size, args.balance, args.use_predictor_server)
         env = get_pipeline_env(params)
         env["HL_NUM_THREADS"] = str(args.hl_threads)
@@ -165,8 +172,8 @@ def main(args):
     if args.build_only:
       return
 
-  src = os.path.join(args.bin_dir, get_hl_target())
-  os.makedirs(args.results_dir, exist_ok=True)
+  src = os.path.join(bin_dir, get_hl_target())
+  os.makedirs(results_dir, exist_ok=True)
   path_re = re.compile(r".*pipe(?P<pipe>\d+)")
   seed_re = re.compile("(.*?_seed)(?P<seed>[^_]*)(_.*?)")
   stage_re = re.compile(".*stages(\d+)")
@@ -179,7 +186,7 @@ def main(args):
     for r, dd, ff in os.walk(src):
       for f in ff:
         if f == "features.msgpack":
-          f = "timing.json"
+          f = "timing.mp"
           match = path_re.match(r)
           pipe_seed = int(match.group("pipe"))
           root_path = re.sub(seed_re, "\g<1>root\g<3>", r)
@@ -188,13 +195,13 @@ def main(args):
 
           try:
             with open(os.path.join(r, f), "r") as fid:
-              new_time = json.load(fid)["time"]
+              new_time = msgpack.load(fid)["time"]
 
             with open(os.path.join(root_path, f), "r") as fid:
-              root_time = json.load(fid)["time"]
+              root_time = msgpack.load(fid)["time"]
 
             with open(os.path.join(master_path, f), "r") as fid:
-              master_time = json.load(fid)["time"]
+              master_time = msgpack.load(fid)["time"]
 
             pipe_seeds.append(pipe_seed)
             root_times.append(root_time)
@@ -204,14 +211,14 @@ def main(args):
           except:
             pass
 
-    with open(os.path.join(args.results_dir, "evaluation_report.json"), "w") as fid:
+    with open(os.path.join(results_dir, "evaluation_report.mp"), "w") as fid:
       report = {
         "pipeline": pipe_seeds,
         "root_time": root_times,
         "master_time": master_times,
         "new_time": new_times,
       }
-      json.dump(report, fid)
+      msgpack.dump(report, fid)
 
   else:
     # Gather training dataset
@@ -220,7 +227,7 @@ def main(args):
     gather_start = time.time()
     for r, dd, ff in os.walk(src):
       for f in ff:
-        if f == "features.msgpack":
+        if f == "features.mp":
           start = time.time()
           # extract pipe seed 
           match = path_re.match(r)
@@ -234,16 +241,16 @@ def main(args):
             with open(feats, "rb") as fid:
               features = msgpack.load(fid)
             times = feats.replace("features", "timing")
-            times = times.replace("msgpack", "json")
-            with open(times, "r") as fid:
-              timing = json.load(fid)
-            times_root = os.path.join(root_path, "timing.json")
-            with open(times_root, "r") as fid:
-              timing_root = json.load(fid)
+            with open(times, "rb") as fid:
+              timing = msgpack.load(fid)
+
+            times_root = os.path.join(root_path, "timing.mp")
+            with open(times_root, "rb") as fid:
+              timing_root = msgpack.load(fid)
 
             features[b"pipeline_seed"] = pipe_seed
-            features[b"time"] = timing["time"]
-            features[b"time_root"] = timing_root["time"]
+            features[b"time"] = timing[b"time"]
+            features[b"time_root"] = timing_root[b"time"]
 
             elapsed = time.time() - start
             if (completed - 1) % 1000 == 0:
@@ -251,22 +258,25 @@ def main(args):
               h, m = divmod(m, 60)
               print(r, elapsed, pipe_seed, features[b"schedule_seed"], features[b"time"], features[b"time_root"])
 
-            fname = "pipeline_{:03d}_schedule_{:03d}_stages_{}.msgpack".format(pipe_seed, features[b"schedule_seed"], num_stages)
-            with open(os.path.join(args.results_dir, fname), "wb") as fid:
+            fname = "pipeline_{:03d}_schedule_{:03d}_stages_{}.mp".format(pipe_seed, features[b"schedule_seed"], num_stages)
+            with open(os.path.join(results_dir, fname), "wb") as fid:
               msgpack.dump(features, fid)
           except:
             if (completed - 1) % 1000 == 0:
               print(r, "failed")
           finally:
             completed += 1
+  print("saved data to {}".format(results_dir))
+
+  print(".Changing directory back to original location {}".format(curdir))
+  os.chdir(curdir)
 
 
 if __name__ == "__main__":
-  # TODO: add mechanism to launch
+  # TODO: add mechanism to launch multiple
   parser = argparse.ArgumentParser()
   parser.add_argument("--workers", type=int, default=4)
   parser.add_argument("--results_dir", type=str, default="generated")
-  parser.add_argument("--bin_dir", type=str, default="bin")
 
   parser.add_argument("--evaluate", dest="evaluate", action="store_true", help="evaluate autoscheduler, instead of generating data samples")
   parser.add_argument("--predictor_url", type=str, default="tcp://localhost:5555", help="url of the throughput predictor server, useful when evaluating our predictions")

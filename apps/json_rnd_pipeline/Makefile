@@ -42,7 +42,7 @@ $(BIN)/random_pipeline.generator: ../random_pipeline/random_pipeline_generator.c
 		-o $@ $(LDFLAGS) $(HALIDE_SYSTEM_LDFLAGS)
 
 # One specific pipeline
-$(BIN)/$(ID)/random_pipeline.a $(BIN)/$(ID)/features.msgpack: $(BIN)/random_pipeline.generator
+$(BIN)/$(ID)/random_pipeline.a $(BIN)/$(ID)/features.mp: $(BIN)/random_pipeline.generator
 	@mkdir -p $(@D)
 	@HL_RANDOM_DROPOUT=$(HL_RANDOM_DROPOUT) \
 	HL_SEED=$(HL_SEED) \
@@ -50,7 +50,7 @@ $(BIN)/$(ID)/random_pipeline.a $(BIN)/$(ID)/features.msgpack: $(BIN)/random_pipe
 	HL_DEBUG_CODEGEN=1 \
 	HL_DEBUG=1 \
 	HL_MACHINE_PARAMS=$(HL_MACHINE_PARAMS) \
-	HL_JSON_DUMP=$(BIN)/$(ID)/features.msgpack \
+	HL_JSON_DUMP=$(BIN)/$(ID)/features.mp \
 	$^ -g random_pipeline -o $(BIN)/$(ID) -f random_pipeline \
 		target=$(HL_TARGET)-no_runtime auto_schedule=$(AUTO_SCHEDULE) \
 		seed=$(PIPELINE_SEED) max_stages=$(PIPELINE_STAGES) \
@@ -63,11 +63,11 @@ $(BIN)/$(ID)/benchmark: benchmark.cpp $(BIN)/$(ID)/random_pipeline.a $(BIN)/runt
 	@$(CXX) $(CXXFLAGS) -I$(BIN)/$(ID) -I$(JSON) -Wall -O3 $^ -o $@ $(LDFLAGS)
 
 # Benchmarking result file
-$(BIN)/$(ID)/timing.json: $(BIN)/$(ID)/benchmark $(BIN)/$(ID)/features.msgpack
+$(BIN)/$(ID)/timing.mp: $(BIN)/$(ID)/benchmark $(BIN)/$(ID)/features.mp
 	@$< $@ 2>&1 > /dev/null
 
 # Target to actually run the benchmark
-bench: $(BIN)/$(ID)/timing.json
+bench: $(BIN)/$(ID)/timing.mp
 
 clean:
 	@echo Cleaning binaries

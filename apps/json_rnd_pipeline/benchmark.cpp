@@ -112,9 +112,9 @@ int main(int argc, char *argv[])
     json jdata;
     jdata["time"] = best;
 
-    std::ofstream json_file(json_path);
-    json_file << jdata << std::endl;
-    json_file.close();
+    std::ofstream json_file(json_path, std::ios::binary);
+    std::vector<std::uint8_t> msgpack_data = json::to_msgpack(jdata);
+    json_file.write(reinterpret_cast<char*>(msgpack_data.data()), msgpack_data.size() * sizeof(std::uint8_t));
 
     return 0;
 }
