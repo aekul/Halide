@@ -35,7 +35,7 @@ $(BIN)/runtime.a: $(BIN)/random_pipeline.generator
 	@$^ -r runtime target=$(HL_TARGET) -o $(BIN)
 
 # Build the Halide generator that generates all the pipelines
-$(BIN)/random_pipeline.generator: random_pipeline_generator.cpp $(GENERATOR_DEPS)
+$(BIN)/random_pipeline.generator: ../random_pipeline/random_pipeline_generator.cpp $(GENERATOR_DEPS)
 	@echo "Building random_pipeline.generator"
 	@mkdir -p $(@D)
 	@$(CXX) $(CXXFLAGS) -fno-rtti $(filter-out %.h,$^) \
@@ -54,8 +54,8 @@ $(BIN)/$(ID)/random_pipeline.a $(BIN)/$(ID)/features.msgpack: $(BIN)/random_pipe
 	$^ -g random_pipeline -o $(BIN)/$(ID) -f random_pipeline \
 		target=$(HL_TARGET)-no_runtime auto_schedule=$(AUTO_SCHEDULE) \
 		seed=$(PIPELINE_SEED) max_stages=$(PIPELINE_STAGES) \
-		2>&1 > /dev/null
-		# 2> $(BIN)/$(ID)/stderr.txt > $(BIN)/$(ID)/stdout.txt
+	  2> $(BIN)/$(ID)/stderr.txt > $(BIN)/$(ID)/stdout.txt
+		#2>&1 > /dev/null
 
 # Binary to benchmark one given pipeline
 $(BIN)/$(ID)/benchmark: benchmark.cpp $(BIN)/$(ID)/random_pipeline.a $(BIN)/runtime.a

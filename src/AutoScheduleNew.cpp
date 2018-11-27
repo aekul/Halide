@@ -1984,6 +1984,14 @@ struct LoopNest {
             , inlined{inlined}
         {}
 
+        vector<Expr> mutate_args(const vector<Expr>& args) {
+            vector<Expr> mutated_args;
+            for (const auto& a : args) {
+                mutated_args.push_back(mutate(a));
+            }
+            return mutated_args;
+        }
+
         Expr create_new_call(const Call *op, const vector<Expr>& new_args) {
             std::string name = op->name;
             vector<Expr> args;
@@ -2011,12 +2019,13 @@ struct LoopNest {
                 arg *= stride;
 
                 if (args.empty()) {
-                  args.push_back(arg);
+                    args.push_back(arg);
                 } else {
-                  args[0] = simplify(common_subexpression_elimination(arg + args[0]));
+                    args[0] = simplify(common_subexpression_elimination(arg + args[0]));
                 }
             }
-            return Call::make(op->type, op->name, args, op->call_type, op->func, op->value_index, op->image, op->param);
+            user_assert(args.size() == 1);
+            return Call::make(op->type, op->name, mutate_args(args), op->call_type, op->func, op->value_index, op->image, op->param);
         };
 
         Expr visit(const Call *op) override {
@@ -2032,8 +2041,8 @@ struct LoopNest {
             }            
 
             if (!is_inlined) {
-                if (op->call_type == Call::PureExtern) {
-                  return op;
+                if (op->call_type == Call::PureExtern || op->call_type == Call::PureIntrinsic) {
+                  return Call::make(op->type, op->name, mutate_args(new_args), op->call_type, op->func, op->value_index, op->image, op->param);
                 }
 
                 return create_new_call(op, new_args);
@@ -2172,18 +2181,21 @@ struct LoopNest {
         };
 
         if (is_root()) {
-            // The random pipeline generator creates a func ("input_im")
-            // that calls "input" (the actual input image) i.e. input_im(x, y, ...) = input(x, y, ...).
-            // "input" is not part of the FunctionDAG so manually check if
-            // "image_im" is part of the DAG. If it is, add an alloc node for "image"
+            // The random pipeline generator creates wrapper funcs (e.g. "input_im")
+            // that call input images (e.g. "input", the actual input image) 
+            // i.e. input_im(x, y, ...) = input(x, y, ...).
+            // The actual input image is not part of the FunctionDAG so manually check if
+            // the wrapper ("*_im") is part of the DAG. If it is, add an alloc node for the image
             for (int i = 0, N = dag.nodes.size(); i < N; i++) {
                 const auto& f = &dag.nodes[i];
 
-                if (f->func.name() != "input_im") {
+                if (f->func.name().find("_im") == std::string::npos) {
                   continue;
                 }
 
-                add_alloc_node(f, "input");
+                // Remove "_im"
+                int len = f->func.name().size() - 3;
+                add_alloc_node(f, f->func.name().substr(0, len));
             }
         }
 
@@ -2253,10 +2265,9 @@ struct LoopNest {
 
         if (innermost) {
             FuncVars& func_vars = vars_map[stage];
-            user_assert(func_vars.vars.size() <= 1);
-            // Possibly add vectorized loop
-            if (func_vars.vars.size() > 0) {
-                add_loop_node(func_vars, 0);
+            // Add remaining loops
+            for (int i = func_vars.vars.size() - 1; i >= 0; i--) {
+                add_loop_node(func_vars, i);
             }
 
             Definition def = node->func.definition();
@@ -2303,9 +2314,10 @@ struct LoopNest {
                 values.push_back(simplify(common_subexpression_elimination(value)));
             }
 
+
             auto compute = make_unique<ComputeNode>(
                 node->func
-                , arg
+                , replacer.mutate(arg)
                 , values
                 , block
                 , features.get(stage)
