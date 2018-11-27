@@ -69,10 +69,10 @@ def build_one(q):
       subprocess.check_output(["make", "build"], env=env, timeout=params.timeout)
       elapsed = time.time() - start
       count += 1
+      print("pid {} {}, compiled in {:.2f}s".format(os.getpid(), params, elapsed))
+      m, s = divmod(int(time.time() - compile_start), 60)
+      h, m = divmod(m, 60)
       if count % 25 == 0:
-        print("pid {} {}, compiled in {:.2f}s".format(os.getpid(), params, elapsed))
-        m, s = divmod(int(time.time() - compile_start), 60)
-        h, m = divmod(m, 60)
         print("Compiled {} programs in {:02d}h:{:02d}m:{:02d}s".format(count, h, m, s))
     except subprocess.TimeoutExpired:
       print("pid {} {}, timed out over {:.2f}s".format(os.getpid(), params, params.timeout))
@@ -241,16 +241,16 @@ def main(args):
             with open(feats, "rb") as fid:
               features = msgpack.load(fid)
             times = feats.replace("features", "timing")
-            with open(times, "r") as fid:
+            with open(times, "rb") as fid:
               timing = msgpack.load(fid)
 
             times_root = os.path.join(root_path, "timing.mp")
-            with open(times_root, "r") as fid:
+            with open(times_root, "rb") as fid:
               timing_root = msgpack.load(fid)
 
             features[b"pipeline_seed"] = pipe_seed
-            features[b"time"] = timing["time"]
-            features[b"time_root"] = timing_root["time"]
+            features[b"time"] = timing[b"time"]
+            features[b"time_root"] = timing_root[b"time"]
 
             elapsed = time.time() - start
             if (completed - 1) % 1000 == 0:
@@ -258,22 +258,22 @@ def main(args):
               h, m = divmod(m, 60)
               print(r, elapsed, pipe_seed, features[b"schedule_seed"], features[b"time"], features[b"time_root"])
 
-            fname = "pipeline_{:03d}_schedule_{:03d}_stages_{}.msgpack".format(pipe_seed, features[b"schedule_seed"], num_stages)
-            with open(os.path.join(args.results_dir, fname), "wb") as fid:
+            fname = "pipeline_{:03d}_schedule_{:03d}_stages_{}.mp".format(pipe_seed, features[b"schedule_seed"], num_stages)
+            with open(os.path.join(results_dir, fname), "wb") as fid:
               msgpack.dump(features, fid)
           except:
             if (completed - 1) % 1000 == 0:
               print(r, "failed")
           finally:
             completed += 1
-  print("saving data to {}".format(results_dir))
+  print("saved data to {}".format(results_dir))
 
   print(".Changing directory back to original location {}".format(curdir))
   os.chdir(curdir)
 
 
 if __name__ == "__main__":
-  # TODO: add mechanism to launch
+  # TODO: add mechanism to launch multiple
   parser = argparse.ArgumentParser()
   parser.add_argument("--workers", type=int, default=4)
   parser.add_argument("--results_dir", type=str, default="generated")

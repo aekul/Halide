@@ -3463,7 +3463,35 @@ struct State {
         binfile.close();
     }
 
-    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params, ThroughputPredictor*throughput_predictor, LoopNestRoot& loop_nest, bool verbose = false, json *json_dump = nullptr) {
+    std::vector<json> dump_featurization(const FunctionDAG &dag, const StageMap<ScheduleFeatures> s_features) {
+      std::vector<json> stage_features;
+      for(const auto &n: dag.nodes) {
+        // TODO(mgharbi): break or error if pipeline is not schedule yet.
+        for(size_t stage_idx = n.stages.size(); stage_idx > 0; stage_idx--) {
+          const auto &s = n.stages[stage_idx - 1];
+          auto sched_feat = s_features.get(&s);
+          const int64_t *sched_stats = (const int64_t *)(&sched_feat);
+          const int *pipe_stats = (const int *)(&s.features);
+
+          json jstage;
+          jstage["name"] = n.func.name();
+          jstage["stage_idx"] = stage_idx - 1;
+          jstage["schedule"] = std::vector<int64_t>(
+                      sched_stats,
+                      sched_stats+sizeof(ScheduleFeatures) / sizeof(int64_t));
+            jstage["pipeline"] = std::vector<int>(
+                      pipe_stats,
+                      pipe_stats+sizeof(s.features) / sizeof(int));
+          stage_features.push_back(jstage);
+
+        }
+      }
+      return stage_features;
+    }  // dump_featurization
+
+    bool calculate_cost(const FunctionDAG &dag, const MachineParams &params,
+                        ThroughputPredictor*throughput_predictor, LoopNestRoot&
+                        loop_nest, bool verbose = false, json *json_dump = nullptr) {
         StageMap<ScheduleFeatures> features;
         compute_featurization(dag, params, &features);
 
@@ -3473,8 +3501,16 @@ struct State {
         std::map<std::string, double> parallelism;
 
         auto vars_and_schedule_data = apply_schedule(params, true);
-        root->create_loop_nest(dag, params, nullptr, 0, 0, 0, &loop_nest.block, store_at_bounds, compute_bounds, strides, parallelism, params.parallelism, features, vars_and_schedule_data.first, vars_and_schedule_data.second, loop_nest.output_sizes);
-        json jdata = loop_nest.block.to_json();
+
+        root->create_loop_nest(dag, params, nullptr, 0, 0, 0, &loop_nest.block,
+            store_at_bounds, compute_bounds, strides, parallelism,
+            params.parallelism, features, vars_and_schedule_data.first,
+            vars_and_schedule_data.second, loop_nest.output_sizes);
+
+        json jdata;
+        std::vector<json> stage_dump = dump_featurization(dag, features);
+        jdata["loop"] = loop_nest.block.to_json();
+        jdata["stage"] = stage_dump;
 
         if (json_dump) {
             (*json_dump)["features"] = jdata;
