@@ -186,10 +186,11 @@ struct LoopNode : LoopLevelNode {
   bool unrolled;
   std::unique_ptr<BlockNode> body;
   TailStrategy tail_strategy;
+  int product_of_outer_loops;
 
   static std::string MakeVarName(Function f, int stage_index, int depth, VarOrRVar var, bool parallel);
 
-  LoopNode(Function f, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled);
+  LoopNode(Function f, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled, int product_of_outer_loops);
 
   std::vector<std::shared_ptr<PipelineLoop>> create_pipeline_loop_nest() const override;
   void dump(int indent_level = 0) const override;

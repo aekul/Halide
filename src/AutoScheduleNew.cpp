@@ -612,8 +612,6 @@ struct FunctionDAG {
                 // consumer.
 
                 Interval in_symbolic{bounds[i].first.expr, bounds[i].second.expr};
-                in_symbolic.min = simplify(substitute(symbolic_vars, in_symbolic.min));
-                in_symbolic.max = simplify(substitute(symbolic_vars, in_symbolic.max));
 
                 if ((size_t)i >= symbolic_bound->region_required.size()) {
                     symbolic_bound->region_required.push_back({in_symbolic.min, in_symbolic.max});
@@ -2115,7 +2113,8 @@ struct LoopNest {
                           const StageMap<ScheduleFeatures>& features,
                           map<const FunctionDAG::Node::Stage *, LoopNest::FuncVars>& vars_map,
                           LoopNest::ScheduleData& schedule_data,
-                          std::map<std::string, OutputSize>& output_sizes) const {
+                          std::map<std::string, OutputSize>& output_sizes,
+                          int product_of_outer_loops) const {
 
         auto get_orig_var_name = [&](const FuncVars::FuncVar& fv) {
             const auto &symbolic_loop = stage->loop;
@@ -2220,7 +2219,10 @@ struct LoopNest {
                 , fv.tail_strategy
                 , fv.var
                 , fv.unrolled
+                , product_of_outer_loops
             );
+
+            product_of_outer_loops *= fv.extent;
 
             std::string key = var_base_name(node->func, var_name, stage_idx);
             user_assert(compute_bounds.count(key) > 0);
@@ -2266,7 +2268,7 @@ struct LoopNest {
         } 
 
         for (int i = children.size() - 1; i >= 0; i--) {
-            children[i]->create_loop_nest(dag, params, this, indent_level, depth + 1, node_depth + 1, block, store_at_bounds, compute_bounds, strides, parallelism, num_cores, features, vars_map, schedule_data, output_sizes);
+            children[i]->create_loop_nest(dag, params, this, indent_level, depth + 1, node_depth + 1, block, store_at_bounds, compute_bounds, strides, parallelism, num_cores, features, vars_map, schedule_data, output_sizes, product_of_outer_loops);
         }
 
         if (innermost) {
@@ -3517,7 +3519,7 @@ struct State {
         root->create_loop_nest(dag, params, nullptr, 0, 0, 0, &loop_nest.block,
             store_at_bounds, compute_bounds, strides, parallelism,
             params.parallelism, features, vars_and_schedule_data.first,
-            vars_and_schedule_data.second, loop_nest.output_sizes);
+            vars_and_schedule_data.second, loop_nest.output_sizes, 1);
 
         json jdata;
         std::vector<json> stage_dump = dump_featurization(dag, features);

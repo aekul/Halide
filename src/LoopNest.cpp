@@ -239,7 +239,7 @@ std::string LoopNode::MakeVarName(Function f, int stage_index, int depth, VarOrR
   return var_name.str();
 }
 
-LoopNode::LoopNode(Function f, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled)
+LoopNode::LoopNode(Function f, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled, int product_of_outer_loops)
   : func{f}
   , var_name{MakeVarName(f, stage_index, depth, var, parallel)}
   , var{Variable::make(Int(32), var_name)}
@@ -251,6 +251,7 @@ LoopNode::LoopNode(Function f, int stage_index, int64_t extent, int vector_size,
   , unrolled{unrolled}
   , body{make_unique<BlockNode>()}
   , tail_strategy{tail_strategy}
+  , product_of_outer_loops{product_of_outer_loops}
 {
   body->parent = this;
 }
@@ -280,6 +281,8 @@ json LoopNode::to_json() const {
   jdata["log2_extent"] = std::log2(extent);
   jdata["vector_size"] = vector_size;
   jdata["log2_vector_size"] = std::log2(vector_size);
+  jdata["product_of_outer_loops"] = product_of_outer_loops;
+  jdata["log2_product_of_outer_loops"] = std::log2(product_of_outer_loops);
   jdata["parallel"] = parallel;
   jdata["unrolled"] = unrolled;
   jdata["block"] = body->to_json();
