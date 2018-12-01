@@ -73,6 +73,14 @@ json BlockNode::to_json() const {
   return jdata;
 }
 
+int64_t BlockNode::get_non_unique_bytes_read() const {
+  int64_t bytes_read = 0;
+  for (const auto& child : children) {
+    bytes_read += child->get_non_unique_bytes_read();
+  }
+  return bytes_read;
+}
+
 std::vector<std::shared_ptr<PipelineLoop>> BlockNode::create_pipeline_loop_nest() const {
   std::vector<std::shared_ptr<PipelineLoop>> loops;
 
@@ -111,13 +119,14 @@ std::set<std::string> BlockNode::get_store_funcs() const {
   return funcs;
 }
 
-ComputeNode::ComputeNode(Function func, const Expr& arg, const std::vector<Expr>& values, const BlockNode* parent, const ScheduleFeatures& schedule_features, const PipelineFeatures& pipeline_features)
+ComputeNode::ComputeNode(Function func, const Expr& arg, const std::vector<Expr>& values, const BlockNode* parent, const ScheduleFeatures& schedule_features, const PipelineFeatures& pipeline_features, int64_t non_unique_bytes_read_per_point)
   : func{func}
   , arg{arg}
   , values{values}
   , parent{parent}
   , schedule_features{schedule_features}
   , pipeline_features{pipeline_features}
+  , non_unique_bytes_read_per_point{non_unique_bytes_read_per_point}
 {
   featurize();
 }
@@ -176,6 +185,8 @@ json ComputeNode::to_json() const {
   auto schedule_features_vector = schedule_features.to_vector();
   jdata["schedule_features"] = schedule_features_vector;
   jdata["log2_schedule_features"] = log2_one_plus(schedule_features_vector);
+  jdata["non_unique_bytes_read_per_point"] = non_unique_bytes_read_per_point;
+  jdata["log2_non_unique_bytes_read_per_point"] = std::log2(1 + non_unique_bytes_read_per_point);
   //jdata["store_jacobian"] = store_jacobian.to_json();
   //for (const auto& j : load_jacobians) {
     //jdata["load_jacobians"].push_back({
@@ -227,6 +238,10 @@ std::set<std::string> ComputeNode::get_compute_funcs() const {
   return {basic_name(func.name())};
 }
 
+int64_t ComputeNode::get_non_unique_bytes_read() const {
+  return non_unique_bytes_read_per_point;
+}
+
 std::string LoopNode::MakeVarName(Function f, int stage_index, int depth, VarOrRVar var, bool parallel) {
   std::ostringstream var_name;
   var_name << f.name();
@@ -239,7 +254,7 @@ std::string LoopNode::MakeVarName(Function f, int stage_index, int depth, VarOrR
   return var_name.str();
 }
 
-LoopNode::LoopNode(Function f, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled, int product_of_outer_loops)
+LoopNode::LoopNode(Function f, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled, int product_of_outer_loops, int64_t unique_bytes_read)
   : func{f}
   , var_name{MakeVarName(f, stage_index, depth, var, parallel)}
   , var{Variable::make(Int(32), var_name)}
@@ -252,6 +267,7 @@ LoopNode::LoopNode(Function f, int stage_index, int64_t extent, int vector_size,
   , body{make_unique<BlockNode>()}
   , tail_strategy{tail_strategy}
   , product_of_outer_loops{product_of_outer_loops}
+  , unique_bytes_read{unique_bytes_read}
 {
   body->parent = this;
 }
@@ -283,6 +299,18 @@ json LoopNode::to_json() const {
   jdata["log2_vector_size"] = std::log2(vector_size);
   jdata["product_of_outer_loops"] = product_of_outer_loops;
   jdata["log2_product_of_outer_loops"] = std::log2(product_of_outer_loops);
+
+  int64_t non_unique_bytes_read = get_non_unique_bytes_read();
+  jdata["non_unique_bytes_read"] = non_unique_bytes_read;
+  jdata["log2_non_unique_bytes_read"] = std::log2(1 + non_unique_bytes_read);
+
+  jdata["unique_bytes_read"] = unique_bytes_read;
+  jdata["log2_unique_bytes_read"] = std::log2(1 + unique_bytes_read);
+
+  float bytes_read_ratio = (float)non_unique_bytes_read / (float)(1 + unique_bytes_read);
+  jdata["bytes_read_ratio"] = bytes_read_ratio;
+  jdata["log2_bytes_read_ratio"] = std::log2(1 + bytes_read_ratio);
+
   jdata["parallel"] = parallel;
   jdata["unrolled"] = unrolled;
   jdata["block"] = body->to_json();
@@ -291,6 +319,10 @@ json LoopNode::to_json() const {
   jdata["is_shiftinwards"] = tail_strategy == TailStrategy::ShiftInwards;
   jdata["is_auto"] = tail_strategy == TailStrategy::Auto;
   return jdata;
+}
+
+int64_t LoopNode::get_non_unique_bytes_read() const {
+  return extent * body->get_non_unique_bytes_read();
 }
 
 std::vector<std::shared_ptr<PipelineLoop>> LoopNode::create_pipeline_loop_nest() const {

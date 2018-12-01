@@ -2121,6 +2121,79 @@ struct LoopNest {
         }
     };
 
+    int64_t get_non_unique_bytes_read_per_point(const FunctionDAG::Node * f) const {
+        int64_t non_unique_bytes_read_per_point = 0;
+        for (const auto *e : f->incoming_edges) {
+            if (inlined.contains(e->producer)) {
+                non_unique_bytes_read_per_point += get_non_unique_bytes_read_per_point(e->producer);
+                continue;
+            }
+            non_unique_bytes_read_per_point += e->calls * e->producer->bytes_per_point;
+        }
+        return non_unique_bytes_read_per_point; 
+    }
+
+    set<const FunctionDAG::Node*> nodes_computed_here() const {
+        if (is_root()) {
+            return {};
+        }
+        set<const FunctionDAG::Node*> nodes;
+
+        vector<const FunctionDAG::Node*> pending;
+        pending.push_back(node);
+        while (pending.size() > 0) {
+            const auto& n = pending.back();
+            pending.pop_back();
+
+            const auto &next = n->incoming_edges;
+
+            for (const auto *e : next) {
+                if (inlined.contains(e->producer)) {
+                    pending.push_back(e->producer);
+                    continue;
+                }
+
+                // Already processed this node
+                //if (nodes.count(e->producer)) {
+                    //continue;
+                //}
+
+                nodes.insert(e->producer);
+            }
+
+            for (auto& child : children) {
+                for (auto& child_n : child->nodes_computed_here()) {
+                    nodes.insert(child_n);
+                }
+            }
+        }
+
+        return nodes;
+    }
+
+    int64_t get_bytes_loaded(const LoopNest *parent) const {
+        int64_t total_footprint = 0;
+
+        if (!node || !parent) {
+            return total_footprint;
+        }
+
+        set<const FunctionDAG::Node*> nodes = nodes_computed_here();
+
+        for (const auto& n : nodes) {
+            int64_t footprint = n->bytes_per_point;
+
+            for (int i = 0; i < node->func.dimensions(); i++) {
+                auto p = parent->get_bounds(n)->region_required(i);
+                footprint *= p.second - p.first + 1;
+            }
+
+            total_footprint += footprint;
+        }
+
+        return total_footprint;
+    }
+
     void create_loop_nest(const FunctionDAG &dag,
                           const MachineParams &params,
                           const LoopNest *parent,
@@ -2258,6 +2331,8 @@ struct LoopNest {
 
         }
 
+        int64_t bytes_loaded = get_bytes_loaded(parent);
+
         auto add_loop_node = [&](FuncVars& func_vars, int i) {
             const auto& fv = func_vars.vars[i]; 
             auto var_name = get_orig_var_name(fv);
@@ -2274,6 +2349,7 @@ struct LoopNest {
                 , fv.var
                 , fv.unrolled
                 , product_of_outer_loops
+                , bytes_loaded
             );
 
             product_of_outer_loops *= fv.extent;
@@ -2360,6 +2436,7 @@ struct LoopNest {
             children[i]->create_loop_nest(dag, params, this, indent_level, depth + 1, node_depth + 1, block, store_at_bounds, compute_bounds, strides, parallelism, num_cores, features, vars_map, schedule_data, output_sizes, product_of_outer_loops, allocs, alloced, compute_offsets, store_offsets, compute_mins, current_mins, root_store_offsets);
         }
 
+
         if (innermost) {
             FuncVars& func_vars = vars_map[stage];
             // Add remaining loops
@@ -2413,6 +2490,7 @@ struct LoopNest {
                 , block
                 , features.get(stage)
                 , node->stages[stage_idx].features
+                , get_non_unique_bytes_read_per_point(node)
             );
             block->add_child(std::move(compute));
         }
