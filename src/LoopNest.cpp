@@ -27,16 +27,22 @@ json AllocNode::to_json() const {
   json jdata;
   jdata["type"] = "alloc";
   jdata["name"] = name;
-  jdata["size"] = size;
-  jdata["log2_size"] = std::log2(size);
-  jdata["region"] = region;
-  auto log2_region = log2(region);
-  jdata["log2_region"] = log2(region);
-  jdata["bytes_per_point"] = bytes_per_point;
-  jdata["log2_bytes_per_point"] = std::log2(bytes_per_point);
-  jdata["size_bytes_per_point"] = size * bytes_per_point;
-  jdata["log2_size_bytes_per_point"] = std::log2(size * bytes_per_point);
-  jdata["should_store_on_stack"] = should_store_on_stack;
+
+  jdata["features"] = {
+    size
+    , std::log2(size)
+    , bytes_per_point
+    , std::log2(bytes_per_point)
+    , size * bytes_per_point
+    , std::log2(size * bytes_per_point)
+    , should_store_on_stack
+  };
+
+  for (const auto& r : region) {
+    jdata["features"].push_back(r);
+    jdata["features"].push_back(std::log2(r));
+  }
+
   return jdata;
 }
 
@@ -183,10 +189,12 @@ json ComputeNode::to_json() const {
   jdata["loop_nest_pipeline_features"] = features.json_dump();
   jdata["pipeline_features"] = pipeline_features.json_dump();
   auto schedule_features_vector = schedule_features.to_vector();
+  schedule_features_vector.push_back(non_unique_bytes_read_per_point);
   jdata["schedule_features"] = schedule_features_vector;
-  jdata["log2_schedule_features"] = log2_one_plus(schedule_features_vector);
-  jdata["non_unique_bytes_read_per_point"] = non_unique_bytes_read_per_point;
-  jdata["log2_non_unique_bytes_read_per_point"] = std::log2(1 + non_unique_bytes_read_per_point);
+
+  for (const auto& s : log2_one_plus(schedule_features_vector)) {
+    jdata["schedule_features"].push_back(s);
+  }
   //jdata["store_jacobian"] = store_jacobian.to_json();
   //for (const auto& j : load_jacobians) {
     //jdata["load_jacobians"].push_back({
@@ -293,31 +301,32 @@ json LoopNode::to_json() const {
   std::stringstream s;
   s << var;
   jdata["var"] = s.str();
-  jdata["extent"] = extent;
-  jdata["log2_extent"] = std::log2(extent);
-  jdata["vector_size"] = vector_size;
-  jdata["log2_vector_size"] = std::log2(vector_size);
-  jdata["product_of_outer_loops"] = product_of_outer_loops;
-  jdata["log2_product_of_outer_loops"] = std::log2(product_of_outer_loops);
 
   int64_t non_unique_bytes_read = get_non_unique_bytes_read();
-  jdata["non_unique_bytes_read"] = non_unique_bytes_read;
-  jdata["log2_non_unique_bytes_read"] = std::log2(1 + non_unique_bytes_read);
-
-  jdata["unique_bytes_read"] = unique_bytes_read;
-  jdata["log2_unique_bytes_read"] = std::log2(1 + unique_bytes_read);
-
   float bytes_read_ratio = (float)non_unique_bytes_read / (float)(1 + unique_bytes_read);
-  jdata["bytes_read_ratio"] = bytes_read_ratio;
-  jdata["log2_bytes_read_ratio"] = std::log2(1 + bytes_read_ratio);
 
-  jdata["parallel"] = parallel;
-  jdata["unrolled"] = unrolled;
+  jdata["features"] = {
+    extent
+    , std::log2(extent)
+    , vector_size
+    , std::log2(vector_size)
+    , product_of_outer_loops
+    , std::log2(product_of_outer_loops)
+    , non_unique_bytes_read
+    , std::log2(1 + non_unique_bytes_read)
+    , unique_bytes_read
+    , std::log2(1 + unique_bytes_read)
+    , bytes_read_ratio
+    , std::log2(1 + bytes_read_ratio)
+    , parallel
+    , unrolled
+    , tail_strategy == TailStrategy::RoundUp
+    , tail_strategy == TailStrategy::GuardWithIf
+    , tail_strategy == TailStrategy::ShiftInwards
+    , tail_strategy == TailStrategy::Auto
+  };
+
   jdata["block"] = body->to_json();
-  jdata["is_round_up"] = tail_strategy == TailStrategy::RoundUp;
-  jdata["is_guard_with_if"] = tail_strategy == TailStrategy::GuardWithIf;
-  jdata["is_shiftinwards"] = tail_strategy == TailStrategy::ShiftInwards;
-  jdata["is_auto"] = tail_strategy == TailStrategy::Auto;
   return jdata;
 }
 
