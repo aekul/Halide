@@ -311,7 +311,6 @@ json LoopNode::to_json() const {
     , vector_size
     , std::log2(vector_size)
     , product_of_outer_loops
-    , std::log2(product_of_outer_loops)
     , non_unique_bytes_read
     , std::log2(1 + non_unique_bytes_read)
     , unique_bytes_read

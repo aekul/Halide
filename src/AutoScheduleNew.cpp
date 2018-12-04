@@ -2360,7 +2360,7 @@ struct LoopNest {
                 , bytes_loaded
             );
 
-            product_of_outer_loops *= fv.extent;
+            product_of_outer_loops += std::log2(fv.extent);
 
             std::string key = var_base_name(node->func, var_name, stage_idx);
             auto var_min = loop_node->var * IntImm::make(Int(32), inner_extent);
@@ -3718,7 +3718,7 @@ struct State {
         root->create_loop_nest(dag, params, nullptr, 0, 0, 0, &loop_nest.block,
             store_at_bounds, compute_bounds, strides, parallelism,
             params.parallelism, features, vars_and_schedule_data.first,
-            vars_and_schedule_data.second, loop_nest.output_sizes, 1, allocs, alloced, compute_offsets, store_offsets, compute_mins, current_mins, root_store_offsets);
+            vars_and_schedule_data.second, loop_nest.output_sizes, 0, allocs, alloced, compute_offsets, store_offsets, compute_mins, current_mins, root_store_offsets);
 
         json jdata;
         std::vector<json> stage_dump = dump_featurization(dag, features);
