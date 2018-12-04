@@ -3302,7 +3302,7 @@ struct LoopNest {
             FuncVar() : orig(Var()), var(Var()) {}
         };
         vector<FuncVar> vars; // In order from innermost to outermost. Each group of d is one tiling.
-        std::ostringstream schedule_source;
+        std::string schedule_source;
     };
 
     struct ScheduleData {
@@ -3376,7 +3376,7 @@ struct LoopNest {
                     if (!obtain_loop_nest_only) {
                         Func(node->func).store_in(MemoryType::Stack);
                     }
-                    state.schedule_source << "\n    .store_in(MemoryType::Stack)";
+                    state.schedule_source += "\n    .store_in(MemoryType::Stack)";
                     schedule_data.store_on_stack_set.insert(node);
                 }
             }
@@ -3449,14 +3449,16 @@ struct LoopNest {
                                 .vectorize(vec);
                             }
 
+                            std::ostringstream ts;
+                            ts << tail_strategy;
                             state.schedule_source
-                                << "\n    .split("
-                                << innermost_pure_var->var.name() << ", "
-                                << innermost_pure_var->var.name() << ", "
-                                << vec.name() << ", "
-                                << split_factor << ", "
-                                << "TailStrategy::" << tail_strategy << ").vectorize("
-                                << vec.name() << ")";
+                                += "\n    .split("
+                                + innermost_pure_var->var.name() + ", "
+                                + innermost_pure_var->var.name() + ", "
+                                + vec.name() + ", "
+                                + std::to_string(split_factor) + ", "
+                                + "TailStrategy::" + ts.str() + ").vectorize("
+                                + vec.name() + ")";
 
                             StageScheduleState::FuncVar v = *innermost_pure_var;
                             v.extent = split_factor;
@@ -3497,7 +3499,7 @@ struct LoopNest {
                                 if (!obtain_loop_nest_only) {
                                     s.unroll(state.vars[i].var);
                                 }
-                                state.schedule_source << "\n    .unroll(" << state.vars[i].var.name() << ")";
+                                state.schedule_source += "\n    .unroll(" + state.vars[i].var.name() + ")";
                                 state.vars[i].unrolled = true;
                             }
                         }
@@ -3537,13 +3539,15 @@ struct LoopNest {
                             if (!obtain_loop_nest_only) {
                                 s.split(parent.var, outer, inner, (int)factor, tail_strategy);
                             }
+                            std::ostringstream ts;
+                            ts << tail_strategy;
                             state.schedule_source
-                                << "\n    .split("
-                                << parent.var.name() << ", "
-                                << outer.name() << ", "
-                                << inner.name() << ", "
-                                << factor << ", "
-                                << "TailStrategy::" << tail_strategy << ")";
+                                += "\n    .split("
+                                + parent.var.name() + ", "
+                                + outer.name() + ", "
+                                + inner.name() + ", "
+                                + std::to_string(factor) + ", "
+                                + "TailStrategy::" + ts.str() + ")";
                             v = parent;
                             parent.var = outer;
                             parent.extent = size[i];
@@ -3583,15 +3587,15 @@ struct LoopNest {
                 if (c->node != node) {
                     auto &state = state_map[c->stage];
                     state.schedule_source
-                        << "\n    .compute_at("
-                        << here.lock().to_string() << ")";
+                        += "\n    .compute_at("
+                        + here.lock().to_string() + ")";
                 }
             }
             for (auto f : store_at) {
                 auto &state = state_map[&(f->stages[0])];
                 state.schedule_source
-                    << "\n    .store_at("
-                    << here.lock().to_string() << ")";
+                    += "\n    .store_at("
+                    + here.lock().to_string() + ")";
             }
         }
     }
@@ -4051,7 +4055,7 @@ struct State {
         LoopNest::ScheduleData schedule_data;
         root->apply(LoopLevel::root(), state_map, params.parallelism, 0, nullptr, nullptr, nullptr, nullptr, schedule_data, obtain_loop_nest_only);
 
-        std::ostringstream src;
+        std::string src;
 
         // Gather all Vars and RVars so that we can declare them in the emitted source
         std::set<string> vars, rvars;
@@ -4069,18 +4073,18 @@ struct State {
         if (!vars.empty()) {
             string prefix = "Var ";
             for (const auto &v : vars) {
-                src << prefix << v << "(\"" << v << "\")";
+                src += prefix + v + "(\"" + v + "\")";
                 prefix = ", ";
             }
-            src << ";\n";
+            src += ";\n";
         }
         if (!rvars.empty()) {
             string prefix = "RVar ";
             for (const auto &v : vars) {
-                src << prefix << v << "(\"" << v << "\")";
+                src += prefix + v + "(\"" + v + "\")";
                 prefix = ", ";
             }
-            src << ";\n";
+            src += ";\n";
         }
 
         for (auto &p : state_map) {
@@ -4105,7 +4109,7 @@ struct State {
                 if (!obtain_loop_nest_only) {
                     stage.parallel(it->var);
                 }
-                p.second.schedule_source << "\n    .parallel(" << it->var.name() << ")";
+                p.second.schedule_source += "\n    .parallel(" + it->var.name() + ")";
                 it->unrolled = false;
                 // Stop at a sufficient number of tasks (TODO: Make this a tiling level in the search space instead).
                 if (parallel_tasks > params.parallelism * 8) {
@@ -4114,31 +4118,31 @@ struct State {
             }
 
             vector<LoopNest::StageScheduleState::FuncVar> func_vars;
-            p.second.schedule_source << "\n    .reorder(";
+            p.second.schedule_source += "\n    .reorder(";
             bool first = true;
             for (auto &v : p.second.vars) {
                 if (v.exists) {
                     vars.push_back(v.var);
                     if (!first) {
-                        p.second.schedule_source << ", ";
+                        p.second.schedule_source += ", ";
                     }
                     first = false;
-                    p.second.schedule_source << v.var.name();
+                    p.second.schedule_source += v.var.name();
                     func_vars.push_back(v);
                 }
             }
             p.second.vars = func_vars;
-            p.second.schedule_source << ")";
+            p.second.schedule_source += ")";
             if (!obtain_loop_nest_only) {
                 stage.reorder(vars);
             }
 
             // Dump the schedule source string
-            src << p.first->name
-                << p.second.schedule_source.str()
-                << ";\n";
+            src += p.first->name
+                + p.second.schedule_source
+                + ";\n";
         }
-        schedule_source = src.str();
+        schedule_source = src;
 
         return {std::move(state_map), schedule_data};
     }
