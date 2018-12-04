@@ -124,6 +124,10 @@ struct LoopLevelNode {
   virtual int64_t get_non_unique_bytes_read() const {
     return 0;
   }
+
+  virtual int64_t get_sum_of_allocs() const {
+    return 0;
+  }
 };
 
 struct AllocNode : LoopLevelNode {
@@ -138,6 +142,7 @@ struct AllocNode : LoopLevelNode {
   json to_json() const override;
   std::vector<std::shared_ptr<PipelineLoop>> create_pipeline_loop_nest() const override;
   std::set<std::string> get_store_funcs() const override;
+  int64_t get_sum_of_allocs() const override;
 };
 
 struct BlockNode : LoopLevelNode {
@@ -157,6 +162,7 @@ struct BlockNode : LoopLevelNode {
   std::set<std::string> get_store_funcs() const override;
 
   int64_t get_non_unique_bytes_read() const override;
+  int64_t get_sum_of_allocs() const override;
 };
 
 struct ComputeNode : LoopLevelNode {
@@ -205,6 +211,7 @@ struct LoopNode : LoopLevelNode {
   void dump(int indent_level = 0) const override;
   json to_json() const override;
   int64_t get_non_unique_bytes_read() const override;
+  int64_t get_sum_of_allocs() const override;
 };
 
 struct LoweredFuncToLoopNest : IRVisitor {

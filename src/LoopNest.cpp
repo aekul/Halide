@@ -54,6 +54,10 @@ std::set<std::string> AllocNode::get_store_funcs() const {
   return {basic_name(name)};
 }
 
+int64_t AllocNode::get_sum_of_allocs() const {
+  return size;
+}
+
 void BlockNode::add_child(std::unique_ptr<LoopLevelNode> child) {
   children.push_back(std::move(child));
 }
@@ -123,6 +127,14 @@ std::set<std::string> BlockNode::get_store_funcs() const {
     }
   }
   return funcs;
+}
+
+int64_t BlockNode::get_sum_of_allocs() const {
+  int64_t sum = 0;
+  for (const auto& c : children) {
+    sum += c->get_sum_of_allocs();
+  }
+  return sum;
 }
 
 ComputeNode::ComputeNode(Function func, const Expr& arg, const std::vector<Expr>& values, const BlockNode* parent, const ScheduleFeatures& schedule_features, const PipelineFeatures& pipeline_features, int64_t non_unique_bytes_read_per_point)
@@ -304,6 +316,7 @@ json LoopNode::to_json() const {
 
   int64_t non_unique_bytes_read = get_non_unique_bytes_read();
   float bytes_read_ratio = (float)non_unique_bytes_read / (float)(1 + unique_bytes_read);
+  int64_t working_set = get_sum_of_allocs();
 
   jdata["features"] = {
     extent
@@ -317,6 +330,8 @@ json LoopNode::to_json() const {
     , std::log2(1 + unique_bytes_read)
     , bytes_read_ratio
     , std::log2(1 + bytes_read_ratio)
+    , working_set
+    , std::log2(1 + working_set)
     , parallel
     , unrolled
     , vector_size > 1
@@ -332,6 +347,10 @@ json LoopNode::to_json() const {
 
 int64_t LoopNode::get_non_unique_bytes_read() const {
   return extent * body->get_non_unique_bytes_read();
+}
+
+int64_t LoopNode::get_sum_of_allocs() const {
+  return body->get_sum_of_allocs();
 }
 
 std::vector<std::shared_ptr<PipelineLoop>> LoopNode::create_pipeline_loop_nest() const {
