@@ -320,6 +320,7 @@ json LoopNode::to_json() const {
     , std::log2(1 + bytes_read_ratio)
     , parallel
     , unrolled
+    , vector_size > 1
     , tail_strategy == TailStrategy::RoundUp
     , tail_strategy == TailStrategy::GuardWithIf
     , tail_strategy == TailStrategy::ShiftInwards
