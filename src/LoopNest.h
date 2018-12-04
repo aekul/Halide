@@ -128,6 +128,10 @@ struct LoopLevelNode {
   virtual int64_t get_sum_of_allocs() const {
     return 0;
   }
+
+  virtual int64_t get_num_bytes_computed() const {
+    return 0;
+  }
 };
 
 struct AllocNode : LoopLevelNode {
@@ -163,6 +167,7 @@ struct BlockNode : LoopLevelNode {
 
   int64_t get_non_unique_bytes_read() const override;
   int64_t get_sum_of_allocs() const override;
+  int64_t get_num_bytes_computed() const override;
 };
 
 struct ComputeNode : LoopLevelNode {
@@ -176,8 +181,9 @@ struct ComputeNode : LoopLevelNode {
   ScheduleFeatures schedule_features;
   PipelineFeatures pipeline_features;
   int64_t non_unique_bytes_read_per_point;
+  int64_t bytes_per_point;
 
-  ComputeNode(Function func, const Expr& arg, const std::vector<Expr>& values, const BlockNode* parent, const ScheduleFeatures& schedule_features, const PipelineFeatures& pipeline_features, int64_t non_unique_bytes_read_per_point);
+  ComputeNode(Function func, const Expr& arg, const std::vector<Expr>& values, const BlockNode* parent, const ScheduleFeatures& schedule_features, const PipelineFeatures& pipeline_features, int64_t non_unique_bytes_read_per_point, int64_t bytes_per_point);
 
   void featurize();
   std::vector<const LoopNode*> get_loop_stack() const;
@@ -186,6 +192,7 @@ struct ComputeNode : LoopLevelNode {
   void dump(int indent_level = 0) const override;
   json to_json() const override;
   int64_t get_non_unique_bytes_read() const override;
+  int64_t get_num_bytes_computed() const override;
 };
 
 struct LoopNode : LoopLevelNode {
@@ -212,6 +219,7 @@ struct LoopNode : LoopLevelNode {
   json to_json() const override;
   int64_t get_non_unique_bytes_read() const override;
   int64_t get_sum_of_allocs() const override;
+  int64_t get_num_bytes_computed() const override;
 };
 
 struct LoweredFuncToLoopNest : IRVisitor {

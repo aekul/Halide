@@ -137,7 +137,15 @@ int64_t BlockNode::get_sum_of_allocs() const {
   return sum;
 }
 
-ComputeNode::ComputeNode(Function func, const Expr& arg, const std::vector<Expr>& values, const BlockNode* parent, const ScheduleFeatures& schedule_features, const PipelineFeatures& pipeline_features, int64_t non_unique_bytes_read_per_point)
+int64_t BlockNode::get_num_bytes_computed() const {
+  int64_t sum = 0;
+  for (const auto& c : children) {
+    sum += c->get_num_bytes_computed();
+  }
+  return sum;
+}
+
+ComputeNode::ComputeNode(Function func, const Expr& arg, const std::vector<Expr>& values, const BlockNode* parent, const ScheduleFeatures& schedule_features, const PipelineFeatures& pipeline_features, int64_t non_unique_bytes_read_per_point, int64_t bytes_per_point)
   : func{func}
   , arg{arg}
   , values{values}
@@ -145,6 +153,7 @@ ComputeNode::ComputeNode(Function func, const Expr& arg, const std::vector<Expr>
   , schedule_features{schedule_features}
   , pipeline_features{pipeline_features}
   , non_unique_bytes_read_per_point{non_unique_bytes_read_per_point}
+  , bytes_per_point{bytes_per_point}
 {
   featurize();
 }
@@ -262,6 +271,10 @@ int64_t ComputeNode::get_non_unique_bytes_read() const {
   return non_unique_bytes_read_per_point;
 }
 
+int64_t ComputeNode::get_num_bytes_computed() const {
+  return bytes_per_point;
+}
+
 std::string LoopNode::MakeVarName(Function f, int stage_index, int depth, VarOrRVar var, bool parallel) {
   std::ostringstream var_name;
   var_name << f.name();
@@ -317,6 +330,7 @@ json LoopNode::to_json() const {
   int64_t non_unique_bytes_read = get_non_unique_bytes_read();
   float bytes_read_ratio = (float)non_unique_bytes_read / (float)(1 + unique_bytes_read);
   int64_t working_set = get_sum_of_allocs();
+  int64_t num_bytes_computed = get_num_bytes_computed();
 
   jdata["features"] = {
     extent
@@ -332,6 +346,8 @@ json LoopNode::to_json() const {
     , std::log2(1 + bytes_read_ratio)
     , working_set
     , std::log2(1 + working_set)
+    , num_bytes_computed
+    , std::log2(num_bytes_computed)
     , parallel
     , unrolled
     , vector_size > 1
@@ -351,6 +367,10 @@ int64_t LoopNode::get_non_unique_bytes_read() const {
 
 int64_t LoopNode::get_sum_of_allocs() const {
   return body->get_sum_of_allocs();
+}
+
+int64_t LoopNode::get_num_bytes_computed() const {
+  return extent * body->get_num_bytes_computed();
 }
 
 std::vector<std::shared_ptr<PipelineLoop>> LoopNode::create_pipeline_loop_nest() const {

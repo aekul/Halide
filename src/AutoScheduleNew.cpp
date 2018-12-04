@@ -2499,6 +2499,7 @@ struct LoopNest {
                 , features.get(stage)
                 , node->stages[stage_idx].features
                 , get_non_unique_bytes_read_per_point(node)
+                , node->bytes_per_point
             );
             block->add_child(std::move(compute));
         }
