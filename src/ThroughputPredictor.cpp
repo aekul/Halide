@@ -9,7 +9,7 @@ namespace AutoScheduleModel {
 ThroughputPredictor::ThroughputPredictor(std::string url) :
   context(1), socket(context, ZMQ_REQ), query_id_(0), pipeline_id_(0)
 {
-  socket.connect(url);
+  socket.connect(url.c_str());
 }
 
 
