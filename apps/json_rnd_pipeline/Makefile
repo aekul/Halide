@@ -35,7 +35,7 @@ $(BIN)/runtime.a: $(BIN)/random_pipeline.generator
 	@$^ -r runtime target=$(HL_TARGET) -o $(BIN)
 
 # Build the Halide generator that generates all the pipelines
-$(BIN)/random_pipeline.generator: ../random_pipeline/random_pipeline_generator.cpp $(GENERATOR_DEPS)
+$(BIN)/random_pipeline.generator: random_pipeline_generator.cpp $(GENERATOR_DEPS)
 	@echo "Building random_pipeline.generator"
 	@mkdir -p $(@D)
 	@$(CXX) $(CXXFLAGS) -fno-rtti $(filter-out %.h,$^) \
