@@ -119,7 +119,8 @@ def get_hl_target(seed="root"):
 
 def main(args):
   results_dir = os.path.abspath(args.results_dir)
-  bin_dir = os.path.join(results_dir, "bin")
+  bin_dir = os.path.join("bin")
+  # bin_dir = os.path.join(results_dir, "bin")
   curdir = os.path.abspath(os.curdir)
   
   makedir = os.path.dirname(os.path.abspath(__file__))

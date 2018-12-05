@@ -73,4 +73,4 @@ clean:
 	@echo Cleaning binaries
 	@rm -rf $(BIN)
 
-# .INTERMEDIATE: $(BIN)/$(ID)/random_pipeline.a $(BIN)/$(ID)/benchmark
+.INTERMEDIATE: $(BIN)/$(ID)/random_pipeline.a $(BIN)/$(ID)/benchmark
