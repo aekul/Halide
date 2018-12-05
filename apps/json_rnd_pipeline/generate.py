@@ -5,8 +5,9 @@
 import argparse
 from copy import deepcopy
 import msgpack
-from multiprocessing import Process, Queue, Pool, JoinableQueue
+from multiprocessing import Process, Queue, Pool, JoinableQueue, cpu_count
 import os
+import platform
 import re
 import subprocess
 import time
@@ -47,6 +48,28 @@ class GeneratorParams(object):
       "BIN": self.bin_dir,
       "HL_MACHINE_PARAMS": "{},{},{}".format(self.num_cores, self.llc_size, self.balance),
     }
+
+
+def get_machine_info():
+  info = {}
+  info[b"platform"] = platform.platform().encode()
+  info[b"num_cpu"] = cpu_count()
+  info[b"name"] = platform.node().encode()
+  try:
+    ret = subprocess.check_output("git rev-parse HEAD", shell=True)
+    info[b"git_commit"] = ret
+  except CalledProcessError:
+    # unsuccessful call to git
+    info[b"git_commit"] = None
+
+  try:
+    ret = subprocess.check_output("lscpu", shell=True)
+    info[b"cpu_info"] = ret
+  except CalledProcessError:
+    # unsuccessful call to lscpu
+    info[b"cpu_info"] = None
+
+  return info
 
 
 def get_pipeline_env(params):
@@ -220,6 +243,7 @@ def main(args):
       msgpack.dump(report, fid)
 
   else:
+    machine_info = get_machine_info()
     # Gather training dataset
     print("\nGathering training dataset")
     completed = 0
@@ -251,6 +275,8 @@ def main(args):
             features[b"time"] = timing[b"time"]
             features[b"time_root"] = timing_root[b"time"]
 
+            features[b"machine_info"] = machine_info
+
             elapsed = time.time() - start
             if (completed - 1) % 1000 == 0:
               m, s = divmod(int(time.time() - gather_start), 60)
@@ -274,8 +300,8 @@ def main(args):
 if __name__ == "__main__":
   # TODO: add mechanism to launch multiple
   parser = argparse.ArgumentParser()
+  parser.add_argument("--results_dir", type=str, required=True)
   parser.add_argument("--workers", type=int, default=4, help="number of workers for the parallel build")
-  parser.add_argument("--results_dir", type=str, default="generated")
 
   parser.add_argument("--evaluate", dest="evaluate", action="store_true", help="evaluate autoscheduler, instead of generating data samples")
   parser.add_argument("--predictor_url", type=str, default="tcp://localhost:5555", help="url of the throughput predictor server, useful when evaluating our predictions")
