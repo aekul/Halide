@@ -121,11 +121,23 @@ struct LoopLevelNode {
     return std::string(2 * indent_level, ' ');
   }
 
+  virtual int64_t get_bytes_loaded_from_nested_producers(int64_t prod_outer_extents, const std::set<std::string>& producers) const {
+    return 0;
+  }
+
+  virtual int64_t get_bytes_loaded_from_external_producers() const {
+    return 0;
+  }
+
   virtual int64_t get_non_unique_bytes_read() const {
     return 0;
   }
 
   virtual int64_t get_sum_of_allocs() const {
+    return 0;
+  }
+
+  virtual int64_t get_num_bytes_computed() const {
     return 0;
   }
 };
@@ -141,6 +153,7 @@ struct AllocNode : LoopLevelNode {
   void dump(int indent_level = 0) const override;
   json to_json() const override;
   std::vector<std::shared_ptr<PipelineLoop>> create_pipeline_loop_nest() const override;
+  int64_t get_bytes_loaded_from_nested_producers(int64_t prod_outer_extents, const std::set<std::string>& producers) const override;
   std::set<std::string> get_store_funcs() const override;
   int64_t get_sum_of_allocs() const override;
 };
@@ -161,8 +174,11 @@ struct BlockNode : LoopLevelNode {
   std::set<std::string> get_compute_funcs() const override;
   std::set<std::string> get_store_funcs() const override;
 
+  int64_t get_bytes_loaded_from_nested_producers(int64_t prod_outer_extents, const std::set<std::string>& producers) const override;
+  int64_t get_bytes_loaded_from_external_producers() const override;
   int64_t get_non_unique_bytes_read() const override;
   int64_t get_sum_of_allocs() const override;
+  int64_t get_num_bytes_computed() const override;
 };
 
 struct ComputeNode : LoopLevelNode {
@@ -176,8 +192,9 @@ struct ComputeNode : LoopLevelNode {
   ScheduleFeatures schedule_features;
   PipelineFeatures pipeline_features;
   int64_t non_unique_bytes_read_per_point;
+  int64_t bytes_per_point;
 
-  ComputeNode(Function func, const Expr& arg, const std::vector<Expr>& values, const BlockNode* parent, const ScheduleFeatures& schedule_features, const PipelineFeatures& pipeline_features, int64_t non_unique_bytes_read_per_point);
+  ComputeNode(Function func, const Expr& arg, const std::vector<Expr>& values, const BlockNode* parent, const ScheduleFeatures& schedule_features, const PipelineFeatures& pipeline_features, int64_t non_unique_bytes_read_per_point, int64_t bytes_per_point);
 
   void featurize();
   std::vector<const LoopNode*> get_loop_stack() const;
@@ -186,6 +203,7 @@ struct ComputeNode : LoopLevelNode {
   void dump(int indent_level = 0) const override;
   json to_json() const override;
   int64_t get_non_unique_bytes_read() const override;
+  int64_t get_num_bytes_computed() const override;
 };
 
 struct LoopNode : LoopLevelNode {
@@ -201,17 +219,21 @@ struct LoopNode : LoopLevelNode {
   std::unique_ptr<BlockNode> body;
   TailStrategy tail_strategy;
   int product_of_outer_loops;
-  int64_t unique_bytes_read;
+  int64_t bytes_loaded_from_external_producers;
+  std::set<std::string> nested_producers;
 
   static std::string MakeVarName(Function f, int stage_index, int depth, VarOrRVar var, bool parallel);
 
-  LoopNode(Function f, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled, int product_of_outer_loops, int64_t unique_bytes_read);
+  LoopNode(Function f, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled, int product_of_outer_loops, int64_t bytes_loaded_from_external_producers, const std::set<std::string>& nested_producers);
 
   std::vector<std::shared_ptr<PipelineLoop>> create_pipeline_loop_nest() const override;
   void dump(int indent_level = 0) const override;
   json to_json() const override;
+  int64_t get_bytes_loaded_from_nested_producers(int64_t prod_outer_extents, const std::set<std::string>& producers) const override;
+  int64_t get_bytes_loaded_from_external_producers() const override;
   int64_t get_non_unique_bytes_read() const override;
   int64_t get_sum_of_allocs() const override;
+  int64_t get_num_bytes_computed() const override;
 };
 
 struct LoweredFuncToLoopNest : IRVisitor {

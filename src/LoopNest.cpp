@@ -58,6 +58,14 @@ int64_t AllocNode::get_sum_of_allocs() const {
   return size;
 }
 
+int64_t AllocNode::get_bytes_loaded_from_nested_producers(int64_t prod_outer_extents, const std::set<std::string>& producers) const {
+  if (producers.count(name) == 0) {
+    return 0;
+  }
+
+  return prod_outer_extents * size * bytes_per_point;
+}
+
 void BlockNode::add_child(std::unique_ptr<LoopLevelNode> child) {
   children.push_back(std::move(child));
 }
@@ -137,7 +145,31 @@ int64_t BlockNode::get_sum_of_allocs() const {
   return sum;
 }
 
-ComputeNode::ComputeNode(Function func, const Expr& arg, const std::vector<Expr>& values, const BlockNode* parent, const ScheduleFeatures& schedule_features, const PipelineFeatures& pipeline_features, int64_t non_unique_bytes_read_per_point)
+int64_t BlockNode::get_num_bytes_computed() const {
+  int64_t sum = 0;
+  for (const auto& c : children) {
+    sum += c->get_num_bytes_computed();
+  }
+  return sum;
+}
+
+int64_t BlockNode::get_bytes_loaded_from_nested_producers(int64_t prod_outer_extents, const std::set<std::string>& producers) const {
+  int64_t sum = 0;
+  for (const auto& c : children) {
+    sum += c->get_bytes_loaded_from_nested_producers(prod_outer_extents, producers);
+  }
+  return sum;
+}
+
+int64_t BlockNode::get_bytes_loaded_from_external_producers() const {
+  int64_t sum = 0;
+  for (const auto& c : children) {
+    sum += c->get_bytes_loaded_from_external_producers();
+  }
+  return sum;
+}
+
+ComputeNode::ComputeNode(Function func, const Expr& arg, const std::vector<Expr>& values, const BlockNode* parent, const ScheduleFeatures& schedule_features, const PipelineFeatures& pipeline_features, int64_t non_unique_bytes_read_per_point, int64_t bytes_per_point)
   : func{func}
   , arg{arg}
   , values{values}
@@ -145,6 +177,7 @@ ComputeNode::ComputeNode(Function func, const Expr& arg, const std::vector<Expr>
   , schedule_features{schedule_features}
   , pipeline_features{pipeline_features}
   , non_unique_bytes_read_per_point{non_unique_bytes_read_per_point}
+  , bytes_per_point{bytes_per_point}
 {
   featurize();
 }
@@ -262,6 +295,10 @@ int64_t ComputeNode::get_non_unique_bytes_read() const {
   return non_unique_bytes_read_per_point;
 }
 
+int64_t ComputeNode::get_num_bytes_computed() const {
+  return bytes_per_point;
+}
+
 std::string LoopNode::MakeVarName(Function f, int stage_index, int depth, VarOrRVar var, bool parallel) {
   std::ostringstream var_name;
   var_name << f.name();
@@ -274,7 +311,7 @@ std::string LoopNode::MakeVarName(Function f, int stage_index, int depth, VarOrR
   return var_name.str();
 }
 
-LoopNode::LoopNode(Function f, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled, int product_of_outer_loops, int64_t unique_bytes_read)
+LoopNode::LoopNode(Function f, int stage_index, int64_t extent, int vector_size, const BlockNode* parent, int depth, bool parallel, TailStrategy tail_strategy, VarOrRVar var, bool unrolled, int product_of_outer_loops, int64_t bytes_loaded_from_external_producers, const std::set<std::string>& nested_producers)
   : func{f}
   , var_name{MakeVarName(f, stage_index, depth, var, parallel)}
   , var{Variable::make(Int(32), var_name)}
@@ -287,7 +324,8 @@ LoopNode::LoopNode(Function f, int stage_index, int64_t extent, int vector_size,
   , body{make_unique<BlockNode>()}
   , tail_strategy{tail_strategy}
   , product_of_outer_loops{product_of_outer_loops}
-  , unique_bytes_read{unique_bytes_read}
+  , bytes_loaded_from_external_producers{bytes_loaded_from_external_producers}
+  , nested_producers{nested_producers}
 {
   body->parent = this;
 }
@@ -315,8 +353,11 @@ json LoopNode::to_json() const {
   jdata["var"] = s.str();
 
   int64_t non_unique_bytes_read = get_non_unique_bytes_read();
+  int64_t unique_bytes_read = get_bytes_loaded_from_external_producers() + get_bytes_loaded_from_nested_producers(1, nested_producers);
   float bytes_read_ratio = (float)non_unique_bytes_read / (float)(1 + unique_bytes_read);
   int64_t working_set = get_sum_of_allocs();
+  int64_t num_bytes_computed = get_num_bytes_computed();
+
 
   jdata["features"] = {
     extent
@@ -332,6 +373,8 @@ json LoopNode::to_json() const {
     , std::log2(1 + bytes_read_ratio)
     , working_set
     , std::log2(1 + working_set)
+    , num_bytes_computed
+    , std::log2(num_bytes_computed)
     , parallel
     , unrolled
     , vector_size > 1
@@ -351,6 +394,18 @@ int64_t LoopNode::get_non_unique_bytes_read() const {
 
 int64_t LoopNode::get_sum_of_allocs() const {
   return body->get_sum_of_allocs();
+}
+
+int64_t LoopNode::get_num_bytes_computed() const {
+  return extent * body->get_num_bytes_computed();
+}
+
+int64_t LoopNode::get_bytes_loaded_from_nested_producers(int64_t prod_outer_extents, const std::set<std::string>& producers) const {
+  return body->get_bytes_loaded_from_nested_producers(extent * prod_outer_extents, producers);
+}
+
+int64_t LoopNode::get_bytes_loaded_from_external_producers() const {
+  return bytes_loaded_from_external_producers + body->get_bytes_loaded_from_external_producers();
 }
 
 std::vector<std::shared_ptr<PipelineLoop>> LoopNode::create_pipeline_loop_nest() const {
