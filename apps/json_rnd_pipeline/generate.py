@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Parametrized generation of random pipelines."""
+#TODO(mgharbi): add metadata about the pipe gen
 
 import argparse
 from copy import deepcopy
@@ -110,8 +111,6 @@ def main(args):
     schedule_seeds = ["root", "master", 10000]
   else:
     schedule_seeds = ["root"] + list(range(args.schedules))
-
-  #TODO(mgharbi): add metadata about the pipe gen
 
   q = JoinableQueue()
   pool = Pool(args.workers, build_one, (q, ))
@@ -275,7 +274,7 @@ def main(args):
 if __name__ == "__main__":
   # TODO: add mechanism to launch multiple
   parser = argparse.ArgumentParser()
-  parser.add_argument("--workers", type=int, default=4)
+  parser.add_argument("--workers", type=int, default=4, help="number of workers for the parallel build")
   parser.add_argument("--results_dir", type=str, default="generated")
 
   parser.add_argument("--evaluate", dest="evaluate", action="store_true", help="evaluate autoscheduler, instead of generating data samples")
