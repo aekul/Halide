@@ -193,7 +193,7 @@ def main(args):
         start = time.time()
         try:
           start = time.time()
-          subprocess.check_output(["make", "bench"], env=env, timeout=params.timeout)
+          subprocess.check_output("numactl --cpunodebind=0 make bench", env=env, timeout=params.timeout, shell=True)
           elapsed = time.time() - start
           print("    .Benchmarking {} took {:.2f}s".format(params, elapsed))
         except subprocess.CalledProcessError as e:
