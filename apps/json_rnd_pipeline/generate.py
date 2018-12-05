@@ -93,21 +93,21 @@ def build_one(q):
       subprocess.check_output(["make", "build"], env=env, timeout=params.timeout)
       elapsed = time.time() - start
       count += 1
-      print("pid {} {}, compiled in {:.2f}s".format(os.getpid(), params, elapsed))
+      print("  pid {} {}, compiled in {:.2f}s".format(os.getpid(), params, elapsed))
       m, s = divmod(int(time.time() - compile_start), 60)
       h, m = divmod(m, 60)
       if count % 25 == 0:
         print("Compiled {} programs in {:02d}h:{:02d}m:{:02d}s".format(count, h, m, s))
     except subprocess.TimeoutExpired:
-      print("pid {} {}, timed out over {:.2f}s".format(os.getpid(), params, params.timeout))
+      print("  pid {} {}, timed out over {:.2f}s".format(os.getpid(), params, params.timeout))
     except subprocess.CalledProcessError:
       for k in params.env():
         print("{}={} \\".format(k, params.env()[k]))
-      print("pid {} {}, error".format(os.getpid(), params.env()))
+      print("  pid {} {}, error".format(os.getpid(), params.env()))
 
     q.task_done()
 
-  print("Finished build_one(): compiled {} programs".format(count))
+  print(".Finished build_one(): compiled {} programs".format(count))
 
 
 def get_hl_target(seed="root"):
@@ -144,7 +144,7 @@ def main(args):
     if not args.bench_only:
       print(".Building pipelines")
       for p in range(args.pipelines):
-        pipeline_seed = args.node_id + (p * args.num_nodes)
+        pipeline_seed = args.start_seed + args.node_id + (p * args.num_nodes)
         stages = (p % 30) + 2  # number of stages for that pipeline
         for s in schedule_seeds:
           params = GeneratorParams(
@@ -163,7 +163,7 @@ def main(args):
     completed = 0
     benchmark_start = time.time()
     for p in range(args.pipelines):
-      pipeline_seed = args.node_id + (p * args.num_nodes)
+      pipeline_seed = args.start_seed + args.node_id + (p * args.num_nodes)
       stages = (p % 30) + 2  # number of stages for that pipeline
       for s in schedule_seeds:
         params = GeneratorParams(
@@ -246,7 +246,7 @@ def main(args):
   else:
     machine_info = get_machine_info()
     # Gather training dataset
-    print("\nGathering training dataset")
+    print(".Gathering training dataset")
     completed = 0
     gather_start = time.time()
     for r, dd, ff in os.walk(src):
@@ -275,24 +275,27 @@ def main(args):
             features[b"pipeline_seed"] = pipe_seed
             features[b"time"] = timing[b"time"]
             features[b"time_root"] = timing_root[b"time"]
-
             features[b"machine_info"] = machine_info
 
             elapsed = time.time() - start
-            if (completed - 1) % 1000 == 0:
-              m, s = divmod(int(time.time() - gather_start), 60)
-              h, m = divmod(m, 60)
-              print(r, elapsed, pipe_seed, features[b"schedule_seed"], features[b"time"], features[b"time_root"])
 
-            fname = "pipeline_{:03d}_schedule_{:03d}_stages_{}.mp".format(pipe_seed, features[b"schedule_seed"], num_stages)
+            # if (completed - 1) % 1000 == 0:
+            #   m, s = divmod(int(time.time() - gather_start), 60)
+            #   h, m = divmod(m, 60)
+            #   print(r, elapsed, pipe_seed, features[b"schedule_seed"], features[b"time"], features[b"time_root"])
+
+            print("  ", r)
+
+            fname = "pipeline_{:03d}_schedule_{:03d}_stages_{}.mp".format(
+              pipe_seed, features[b"schedule_seed"], num_stages)
             with open(os.path.join(results_dir, fname), "wb") as fid:
               msgpack.dump(features, fid)
-          except:
-            if (completed - 1) % 1000 == 0:
-              print(r, "failed")
+          except Exception as e:
+            # if (completed - 1) % 1000 == 0:
+            print("  Failed {}: {}".format(r, e))
           finally:
             completed += 1
-  print("saved data to {}".format(results_dir))
+  print(".Saved data to {}".format(results_dir))
 
   print(".Changing directory back to original location {}".format(curdir))
   os.chdir(curdir)
@@ -323,6 +326,7 @@ if __name__ == "__main__":
 
   # For distributed generation (to enseure that different nodes generate different
   # groups of programs)
+  parser.add_argument("--start_seed", type=int, default=0)
   parser.add_argument("--node_id", type=int, default=0)
   parser.add_argument("--num_nodes", type=int, default=1)
 
