@@ -301,7 +301,7 @@ if __name__ == "__main__":
   # TODO: add mechanism to launch multiple
   parser = argparse.ArgumentParser()
   parser.add_argument("--results_dir", type=str, required=True)
-  parser.add_argument("--workers", type=int, default=4, help="number of workers for the parallel build")
+  parser.add_argument("--workers", type=int, default=cpu_count(), help="number of workers for the parallel build")
 
   parser.add_argument("--evaluate", dest="evaluate", action="store_true", help="evaluate autoscheduler, instead of generating data samples")
   parser.add_argument("--predictor_url", type=str, default="tcp://localhost:5555", help="url of the throughput predictor server, useful when evaluating our predictions")
@@ -326,7 +326,7 @@ if __name__ == "__main__":
   parser.add_argument("--num_nodes", type=int, default=1)
 
   # Autoscheduler MachineParams
-  parser.add_argument("--num_cores", type=int, default=8)
+  parser.add_argument("--num_cores", type=int, default=cpu_count())
   # Size of last level cache (in bytes); default = 4096KB
   parser.add_argument("--llc_size", type=int, default=32768)
   parser.add_argument("--balance", type=int, default=40)
