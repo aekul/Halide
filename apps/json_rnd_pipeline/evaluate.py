@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Parametrized generation of random pipelines."""
+#TODO(mgharbi): add metadata about the pipe gen
 
 import argparse
 from copy import deepcopy
@@ -10,8 +11,6 @@ import platform
 import re
 import subprocess
 import time
-
-SEED_RE = re.compile("(.*?_seed)(?P<seed>[^_]*)(_.*?)")
 
 
 class GeneratorParams(object):
@@ -94,18 +93,21 @@ def build_one(q):
       subprocess.check_output(["make", "build"], env=env, timeout=params.timeout)
       elapsed = time.time() - start
       count += 1
-      print("    pid {} {}, compiled in {:.2f}s".format(os.getpid(), params, elapsed))
+      print("  pid {} {}, compiled in {:.2f}s".format(os.getpid(), params, elapsed))
       m, s = divmod(int(time.time() - compile_start), 60)
       h, m = divmod(m, 60)
       if count % 25 == 0:
         print("Compiled {} programs in {:02d}h:{:02d}m:{:02d}s".format(count, h, m, s))
     except subprocess.TimeoutExpired:
-      print("    pid {} {}, timed out over {:.2f}s".format(os.getpid(), params, params.timeout))
+      print("  pid {} {}, timed out over {:.2f}s".format(os.getpid(), params, params.timeout))
     except subprocess.CalledProcessError:
       for k in params.env():
         print("{}={} \\".format(k, params.env()[k]))
-      print("    pid {} {}, error".format(os.getpid(), params.env()))
+      print("  pid {} {}, error".format(os.getpid(), params.env()))
+
     q.task_done()
+
+  print(".Finished build_one(): compiled {} programs".format(count))
 
 
 def get_hl_target(seed="root"):
@@ -113,27 +115,6 @@ def get_hl_target(seed="root"):
     return "host"
   else:
     return "host-new_autoscheduler"
-
-
-def gather_features(schedule_root, pipeline_seed, machine_info):
-  features_path = os.path.join(schedule_root, "features.mp")
-  with open(features_path, "rb") as fid:
-    features = msgpack.load(fid)
-
-  times_path = features_path.replace("features", "timing")
-  with open(times_path, "rb") as fid:
-    timing = msgpack.load(fid)
-
-  root_path = re.sub(SEED_RE, "\g<1>root\g<3>", schedule_root)
-  times_root_path = os.path.join(root_path, "timing.mp")
-  with open(times_root_path, "rb") as fid:
-    timing_root = msgpack.load(fid)
-
-  features[b"pipeline_seed"] = pipeline_seed
-  features[b"time"] = timing[b"time"]
-  features[b"time_root"] = timing_root[b"time"]
-  features[b"machine_info"] = machine_info
-  return features
 
 
 def main(args):
@@ -150,77 +131,170 @@ def main(args):
   print(".Building shared binaries")
   subprocess.check_output(["make", "build_shared"])
 
-  schedule_seeds = ["root"] + list(range(args.schedules))
+  if args.evaluate:
+    schedule_seeds = ["root", "master", 10000]
+  else:
+    schedule_seeds = ["root"] + list(range(args.schedules))
 
   q = JoinableQueue()
   pool = Pool(args.workers, build_one, (q, ))
 
-  num_schedules = len(schedule_seeds)
-
-  machine_info = get_machine_info()
-
   if not args.gather_only:
+    # Distributed build
+    if not args.bench_only:
+      print(".Building pipelines")
+      for p in range(args.pipelines):
+        pipeline_seed = args.start_seed + args.node_id + (p * args.num_nodes)
+        stages = (p % 30) + 2  # number of stages for that pipeline
+        for s in schedule_seeds:
+          params = GeneratorParams(
+            get_hl_target(s), s, pipeline_seed, stages, args.dropout,
+            args.beam_size, args.timeout, args.predictor_url, bin_dir,
+            args.num_cores, args.llc_size, args.balance, args.use_predictor_server)
+          q.put(params, block=True)
+      q.join()
+
+      if args.build_only:
+        return
+
+    # Sequential benchmarking
+    total = args.pipelines * len(schedule_seeds)
+    print(".Benchmarking pipelines: {} total".format(total))
+    completed = 0
+    benchmark_start = time.time()
     for p in range(args.pipelines):
       pipeline_seed = args.start_seed + args.node_id + (p * args.num_nodes)
       stages = (p % 30) + 2  # number of stages for that pipeline
-
-      print(".Pipeline {} of {} with seed {} | {} stages".format(
-        p+1, args.pipelines, pipeline_seed, stages))
-
-      # TODO: check if pipeline has already been generated / benchmarked
-
-      # Distributed build
-      print("  .Compile {} schedules".format(num_schedules))
-      all_params = []
       for s in schedule_seeds:
         params = GeneratorParams(
           get_hl_target(s), s, pipeline_seed, stages, args.dropout,
           args.beam_size, args.timeout, args.predictor_url, bin_dir,
           args.num_cores, args.llc_size, args.balance, args.use_predictor_server)
-        all_params.append(params)
-        q.put(params, block=True)
-
-      # Wait for end of compilation before benchmarking
-      q.join()
-
-      # Sequential benchmarking
-      print("  .Benchmarking {} schedules".format(num_schedules))
-      benchmark_start = time.time()
-      for idx_s, s in enumerate(schedule_seeds):
-        params = all_params[idx_s]
         env = get_pipeline_env(params)
         env["HL_NUM_THREADS"] = str(args.hl_threads)
         start = time.time()
         try:
           start = time.time()
           subprocess.check_output(["make", "bench"], env=env, timeout=params.timeout)
+          # numactl --cpunodebind=0 make bench
           elapsed = time.time() - start
-          print("    .Benchmarking {} took {:.2f}s".format(params, elapsed))
+          print("  .Benchmarking {} took {:.2f}s".format(params, elapsed))
+          completed += 1
         except subprocess.CalledProcessError as e:
           for k in env:
             print("{}={} \\".format(k, env[k]))
-          print("    .Benchmarking {} errored: {}s".format(params, e))
+          print("  .Benchmarking {} errored: {}s".format(params, e))
         except subprocess.TimeoutExpired:
-          print("    .Benchmarking {} timed out at {:.2f}s".format(params, params.timeout))
+          print("  .Benchmarking {} timed out at {:.2f}s".format(params, params.timeout))
 
-      # Gather training samples to final destination
-      print("  .Gathering training samples")
-      data_root = os.path.join(bin_dir, get_hl_target(), "pipe{}_stages{}".format(pipeline_seed, stages))
-      for r, dd, ff in os.walk(data_root):
-        for f in ff:
-          if f != "features.mp":
-            continue
+        if completed % 100 == 0:
+          m, s = divmod(int(time.time() - benchmark_start), 60)
+          h, m = divmod(m, 60)
+          print(".Benchmarked {} / {} in {:02d}h:{:02d}m:{:02d}s".format(completed, total, h, m, s))
+
+    if args.build_only:
+      return
+
+  src = os.path.join(bin_dir, get_hl_target())
+  os.makedirs(results_dir, exist_ok=True)
+  path_re = re.compile(r".*pipe(?P<pipe>\d+)")
+  seed_re = re.compile("(.*?_seed)(?P<seed>[^_]*)(_.*?)")
+  stage_re = re.compile(".*stages(\d+)")
+  if args.evaluate:
+    print("\nConsolidating timing reports")
+    pipe_seeds = []
+    root_times = []
+    master_times = []
+    new_times = []
+    for r, dd, ff in os.walk(src):
+      for f in ff:
+        if f == "features.msgpack":
+          f = "timing.mp"
+          match = path_re.match(r)
+          pipe_seed = int(match.group("pipe"))
+          root_path = re.sub(seed_re, "\g<1>root\g<3>", r)
+          master_path = re.sub(seed_re, "\g<1>master\g<3>", r).replace(
+            get_hl_target(), get_hl_target("master"))
+
           try:
-            features = gather_features(r, pipeline_seed, machine_info)
+            with open(os.path.join(r, f), "r") as fid:
+              new_time = msgpack.load(fid)["time"]
+
+            with open(os.path.join(root_path, f), "r") as fid:
+              root_time = msgpack.load(fid)["time"]
+
+            with open(os.path.join(master_path, f), "r") as fid:
+              master_time = msgpack.load(fid)["time"]
+
+            pipe_seeds.append(pipe_seed)
+            root_times.append(root_time)
+            master_times.append(master_time)
+            new_times.append(new_time)
+            print(pipe_seed, root_time, master_time, new_time)
+          except:
+            pass
+
+    with open(os.path.join(results_dir, "evaluation_report.mp"), "w") as fid:
+      report = {
+        "pipeline": pipe_seeds,
+        "root_time": root_times,
+        "master_time": master_times,
+        "new_time": new_times,
+      }
+      msgpack.dump(report, fid)
+
+  else:
+    machine_info = get_machine_info()
+    # Gather training dataset
+    print(".Gathering training dataset")
+    completed = 0
+    gather_start = time.time()
+    for r, dd, ff in os.walk(src):
+      for f in ff:
+        if f == "features.mp":
+          start = time.time()
+          # extract pipe seed 
+          match = path_re.match(r)
+          pipe_seed = int(match.group("pipe"))
+
+          root_path = re.sub(seed_re, "\g<1>root\g<3>", r)
+          num_stages = int(stage_re.match(r).group(1))
+
+          try:
+            feats = os.path.join(r, f)
+            with open(feats, "rb") as fid:
+              features = msgpack.load(fid)
+            times = feats.replace("features", "timing")
+            with open(times, "rb") as fid:
+              timing = msgpack.load(fid)
+
+            times_root = os.path.join(root_path, "timing.mp")
+            with open(times_root, "rb") as fid:
+              timing_root = msgpack.load(fid)
+
+            features[b"pipeline_seed"] = pipe_seed
+            features[b"time"] = timing[b"time"]
+            features[b"time_root"] = timing_root[b"time"]
+            features[b"machine_info"] = machine_info
+
+            elapsed = time.time() - start
+
+            # if (completed - 1) % 1000 == 0:
+            #   m, s = divmod(int(time.time() - gather_start), 60)
+            #   h, m = divmod(m, 60)
+            #   print(r, elapsed, pipe_seed, features[b"schedule_seed"], features[b"time"], features[b"time_root"])
+
+            print("  ", r)
+
             fname = "pipeline_{:03d}_schedule_{:03d}_stages_{}.mp".format(
-              pipeline_seed, features[b"schedule_seed"], stages)
-            os.makedirs(results_dir, exist_ok=True)
+              pipe_seed, features[b"schedule_seed"], num_stages)
             with open(os.path.join(results_dir, fname), "wb") as fid:
               msgpack.dump(features, fid)
-            print("    ", r)
           except Exception as e:
+            # if (completed - 1) % 1000 == 0:
             print("  Failed {}: {}".format(r, e))
-
+          finally:
+            completed += 1
   print(".Saved data to {}".format(results_dir))
 
   print(".Changing directory back to original location {}".format(curdir))
@@ -228,14 +302,18 @@ def main(args):
 
 
 if __name__ == "__main__":
+  # TODO: add mechanism to launch multiple
   parser = argparse.ArgumentParser()
   parser.add_argument("--results_dir", type=str, required=True)
   parser.add_argument("--workers", type=int, default=cpu_count(), help="number of workers for the parallel build")
 
+  parser.add_argument("--evaluate", dest="evaluate", action="store_true", help="evaluate autoscheduler, instead of generating data samples")
   parser.add_argument("--predictor_url", type=str, default="tcp://localhost:5555", help="url of the throughput predictor server, useful when evaluating our predictions")
   parser.add_argument("--use_predictor_server", action="store_true", help="should we use the predictor server?")
 
   # Selector to run only as subset of steps
+  parser.add_argument("--build_only", dest="build_only", action="store_true", help="do not benchmark the pipelines")
+  parser.add_argument("--bench_only", dest="bench_only", action="store_true", help="do not generate new pipelines, just consolidate the dataset")
   parser.add_argument("--gather_only", dest="gather_only", action="store_true", help="do not generate new pipelines, just consolidate the dataset")
 
   # Generation params
@@ -260,6 +338,8 @@ if __name__ == "__main__":
 
   parser.set_defaults(master_scheduler=False)
 
+  parser.set_defaults(build_only=False)
+  parser.set_defaults(bench_only=False)
   parser.set_defaults(gather_only=False)
 
   args = parser.parse_args()
