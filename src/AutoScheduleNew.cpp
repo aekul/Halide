@@ -2100,6 +2100,20 @@ struct LoopNest {
         return false;
     }
 
+    bool is_stored_in_tree(const FunctionDAG::Node* n) const {
+        if (store_at.count(n) > 0) { 
+            return true;
+        }
+
+        for (const auto& child : children) {
+            if (child->is_stored_in_tree(n)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     bool is_stored_or_inlined_in_tree(const FunctionDAG::Node* n) const {
         if (store_at.count(n) > 0 || inlined.contains(n)) { 
             return true;
@@ -2141,10 +2155,11 @@ struct LoopNest {
         return non_unique_bytes_read_per_point; 
     }
 
-    set<const FunctionDAG::Node*> nodes_computed_here() const {
+    set<const FunctionDAG::Node*> get_producers() const {
         if (is_root()) {
             return {};
         }
+
         set<const FunctionDAG::Node*> nodes;
 
         vector<const FunctionDAG::Node*> pending;
@@ -2170,7 +2185,7 @@ struct LoopNest {
             }
 
             for (auto& child : children) {
-                for (auto& child_n : child->nodes_computed_here()) {
+                for (auto& child_n : child->get_producers()) {
                     nodes.insert(child_n);
                 }
             }
@@ -2179,27 +2194,36 @@ struct LoopNest {
         return nodes;
     }
 
-    int64_t get_bytes_loaded(const LoopNest *parent) const {
-        int64_t total_footprint = 0;
+    int64_t get_bytes_loaded_from_external_producers(const LoopNest *parent, set<std::string>& nested_producers) const {
+        int64_t bytes_loaded = 0;
 
         if (!node || !parent) {
-            return total_footprint;
+            return bytes_loaded;
         }
 
-        set<const FunctionDAG::Node*> nodes = nodes_computed_here();
+        set<const FunctionDAG::Node*> nodes = get_producers();
 
         for (const auto& n : nodes) {
             int64_t footprint = n->bytes_per_point;
 
+            // Skip funcs that are realized inside this loop nest
+            if (is_stored_in_tree(n)) {
+                nested_producers.insert(n->func.name());
+                continue; 
+            }
+
+            const auto &bounds = parent->get_bounds(n);
+
             for (int i = 0; i < node->func.dimensions(); i++) {
-                auto p = parent->get_bounds(n)->region_required(i);
+                auto p = bounds->region_required(i);
+
                 footprint *= p.second - p.first + 1;
             }
 
-            total_footprint += footprint;
+            bytes_loaded += footprint;
         }
 
-        return total_footprint;
+        return bytes_loaded;
     }
 
     void create_loop_nest(const FunctionDAG &dag,
@@ -2339,7 +2363,11 @@ struct LoopNest {
 
         }
 
-        int64_t bytes_loaded = get_bytes_loaded(parent);
+        std::set<std::string> nested_producers;
+        int64_t bytes_loaded_from_external_producers = 0;
+        if (innermost) {
+            bytes_loaded_from_external_producers = get_bytes_loaded_from_external_producers(parent, nested_producers);
+        }
 
         auto add_loop_node = [&](StageScheduleState& func_vars, int i) {
             const auto& fv = func_vars.vars[i]; 
@@ -2357,7 +2385,8 @@ struct LoopNest {
                 , fv.var
                 , fv.unrolled
                 , product_of_outer_loops
-                , bytes_loaded
+                , bytes_loaded_from_external_producers
+                , nested_producers
             );
 
             product_of_outer_loops += std::log2(fv.extent);
