@@ -161,8 +161,8 @@ def main(args):
 
   if not args.gather_only:
     for p in range(args.pipelines):
-      pipeline_seed = args.start_seed + args.node_id + (p * args.num_nodes)
-      stages = (p % 30) + 2  # number of stages for that pipeline
+      pipeline_seed = args.node_id*args.pipelines + p + args.start_seed
+      stages = (pipeline_seed % 30) + 2  # number of stages for that pipeline
 
       print(".Pipeline {} of {} with seed {} | {} stages".format(
         p+1, args.pipelines, pipeline_seed, stages))
@@ -176,7 +176,7 @@ def main(args):
         params = GeneratorParams(
           get_hl_target(s), s, pipeline_seed, stages, args.dropout,
           args.beam_size, args.timeout, args.predictor_url, bin_dir,
-          args.num_cores, args.llc_size, args.balance, args.use_predictor_server)
+          args.hl_threads, args.llc_size, args.balance, args.use_predictor_server)
         all_params.append(params)
         q.put(params, block=True)
 
@@ -204,8 +204,8 @@ def main(args):
           print("    .Benchmarking {} timed out at {:.2f}s".format(params, params.timeout))
 
       # Gather training samples to final destination
-      print("  .Gathering training samples")
       data_root = os.path.join(bin_dir, get_hl_target(), "pipe{}_stages{}".format(pipeline_seed, stages))
+      print("  .Gathering training samples from {}".format(data_root))
       for r, dd, ff in os.walk(data_root):
         for f in ff:
           if f != "features.mp":
@@ -244,7 +244,6 @@ if __name__ == "__main__":
   parser.add_argument("--dropout", type=int, default=50)
   parser.add_argument("--beam_size", type=int, default=1)
   parser.add_argument("--timeout", type=float, default=20.0, help="in seconds")
-  parser.add_argument("--hl_threads", type=int, default=8)
 
   # For distributed generation (to enseure that different nodes generate different
   # groups of programs)
@@ -253,8 +252,8 @@ if __name__ == "__main__":
   parser.add_argument("--num_nodes", type=int, default=1)
 
   # Autoscheduler MachineParams
-  parser.add_argument("--num_cores", type=int, default=cpu_count())
   # Size of last level cache (in bytes); default = 4096KB
+  parser.add_argument("--hl_threads", type=int, default=8)
   parser.add_argument("--llc_size", type=int, default=32768)
   parser.add_argument("--balance", type=int, default=40)
 
