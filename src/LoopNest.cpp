@@ -38,11 +38,6 @@ json AllocNode::to_json() const {
     , should_store_on_stack
   };
 
-  for (const auto& r : region) {
-    jdata["features"].push_back(r);
-    jdata["features"].push_back(std::log2(r));
-  }
-
   return jdata;
 }
 
