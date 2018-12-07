@@ -125,6 +125,12 @@ struct PipelineFeatures {
         }
     }
 
+    std::vector<int> to_vector() const {
+        const int* ptr = (const int*) this;
+        std::vector<int> ret(ptr, ptr+sizeof(*this) / sizeof(int));
+        return ret;
+    }
+
     json json_dump() const {
         json jdata;
         const char *type_names[] = {"Bool", "UInt8", "UInt16", "UInt32", "UInt64", "Float", "Double"};

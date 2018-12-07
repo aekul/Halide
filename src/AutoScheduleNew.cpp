@@ -3705,19 +3705,16 @@ struct State {
         // TODO(mgharbi): break or error if pipeline is not schedule yet.
         for(size_t stage_idx = n.stages.size(); stage_idx > 0; stage_idx--) {
           const auto &s = n.stages[stage_idx - 1];
-          auto sched_feat = s_features.get(&s);
-          const int64_t *sched_stats = (const int64_t *)(&sched_feat);
-          const int *pipe_stats = (const int *)(&s.features);
+          ScheduleFeatures sched_feat = s_features.get(&s);
+          PipelineFeatures pipe_feat = s.features;
+          // const int64_t *sched_stats = (const int64_t *)(&sched_feat);
+          // const int *pipe_stats = (const int *)(&s.features);
 
           json jstage;
           jstage["name"] = n.func.name();
           jstage["stage_idx"] = stage_idx - 1;
-          jstage["schedule"] = std::vector<int64_t>(
-                      sched_stats,
-                      sched_stats+sizeof(ScheduleFeatures) / sizeof(int64_t));
-            jstage["pipeline"] = std::vector<int>(
-                      pipe_stats,
-                      pipe_stats+sizeof(s.features) / sizeof(int));
+          jstage["schedule"] = sched_feat.to_vector();
+          jstage["pipeline"] = pipe_feat.to_vector();
           stage_features.push_back(jstage);
 
         }
@@ -4073,8 +4070,6 @@ struct State {
     json json_dump() const {
         json jdata;
         jdata["cost"] = cost;
-        // TODO(mgharbi): save schedule representation
-        // root.dump("");
         return jdata;
     }
 

@@ -151,101 +151,101 @@ struct ScheduleFeatures {
         };
     }
 
-    json json_dump(bool as_vector=true) const {
-        json jdata;
-        if (as_vector) {
-            jdata["features"] = {
-                num_realizations,
-                num_productions,
-                points_computed_per_realization,
-                points_computed_per_production,
-                points_computed_total,
-                points_computed_minimum,
-                innermost_loop_extent,
-                innermost_pure_loop_extent,
-                inner_parallelism,
-                outer_parallelism,
-                bytes_at_realization,
-                bytes_at_production,
-                bytes_at_root,
-                innermost_bytes_at_realization,
-                innermost_bytes_at_production,
-                innermost_bytes_at_root,
-                bytes_read_per_tile,
-                inlined_calls,
-                unique_bytes_read_per_realization,
-                unique_lines_read_per_realization,
-                allocation_bytes_read_per_realization,
-                working_set,
-                vector_size,
-                rounded_innermost_pure_loop_extent,
-                native_vector_size,
-                non_unique_bytes_read_per_realization,
-
-                total_element_compute_cost,
-                compute_cost_inlined, 
-                vector_overcompute_factor,
-                idle_core_wastage,
-                load_cold_cache_misses,
-                cost_of_cold_miss,
-                capacity_cache_misses,
-                cost_of_capacity_miss,
-                memory_load_cost,
-                store_cache_misses,
-                store_cost_of_miss,
-                memory_store_cost,
-                cache_line_wastage,
-                cost_of_mallocs,
-                cost_of_working_set,
-                compute_cost,
-                total_cost
-            };
-        } else {
-            jdata["num_realizations"]                      = num_realizations;
-            jdata["num_productions"]                       = num_productions;
-            jdata["points_computed_per_realization"]       = points_computed_per_realization;
-            jdata["points_computed_per_production"]        = points_computed_per_production;
-            jdata["points_computed_total"]                 = points_computed_total;
-            jdata["points_computed_minimum"]               = points_computed_minimum;
-            jdata["innermost_loop_extent"]                 = innermost_loop_extent;
-            jdata["innermost_pure_loop_extent"]            = innermost_pure_loop_extent;
-            jdata["inner_parallelism"]                     = inner_parallelism;
-            jdata["outer_parallelism"]                     = outer_parallelism;
-            jdata["bytes_at_realization"]                  = bytes_at_realization;
-            jdata["bytes_at_production"]                   = bytes_at_production;
-            jdata["bytes_at_root"]                         = bytes_at_root;
-            jdata["innermost_bytes_at_realization"]        = innermost_bytes_at_realization;
-            jdata["innermost_bytes_at_production"]         = innermost_bytes_at_production;
-            jdata["innermost_bytes_at_root"]               = innermost_bytes_at_root;
-            jdata["bytes_read_per_tile"]                   = bytes_read_per_tile;
-            jdata["inlined_calls"]                         = inlined_calls;
-            jdata["unique_bytes_read_per_realization"]            = unique_bytes_read_per_realization;
-            jdata["unique_lines_read_per_realization"]            = unique_lines_read_per_realization;
-            jdata["allocation_bytes_read_per_realization"] = allocation_bytes_read_per_realization;
-            jdata["working_set"]                           = working_set;
-            jdata["vector_size"]                           = vector_size;
-            jdata["rounded_innermost_pure_loop_extent"]    = rounded_innermost_pure_loop_extent;
-            jdata["native_vector_size"]                    = native_vector_size;
-            jdata["non_unique_bytes_read_per_realization"] = non_unique_bytes_read_per_realization;
-            jdata["total_element_compute_cost"] = total_element_compute_cost;
-            jdata["compute_cost_inlined"] = compute_cost_inlined;
-            jdata["vector_overcompute_factor"] = vector_overcompute_factor;
-            jdata["load_cold_cache_misses"] = load_cold_cache_misses;
-            jdata["cost_of_cold_miss"] = cost_of_cold_miss;
-            jdata["capacity_cache_misses"] = capacity_cache_misses;
-            jdata["cost_of_capacity_miss"] = cost_of_capacity_miss;
-            jdata["memory_load_cost"] = memory_load_cost;
-            jdata["store_cache_misses"] = store_cache_misses;
-            jdata["store_cost_of_miss"] = store_cost_of_miss;
-            jdata["memory_store_cost"] = memory_store_cost;
-            jdata["cache_line_wastage"] = cache_line_wastage;
-            jdata["cost_of_mallocs"] = cost_of_mallocs;
-            jdata["cost_of_working_set"] = cost_of_working_set;
-            jdata["compute_cost"] = compute_cost;
-            jdata["total_cost"] = total_cost;
-        }
-        return jdata;
-    }
+    // json json_dump(bool as_vector=true) const {
+    //     json jdata;
+    //     if (as_vector) {
+    //         jdata["features"] = {
+    //             num_realizations,
+    //             num_productions,
+    //             points_computed_per_realization,
+    //             points_computed_per_production,
+    //             points_computed_total,
+    //             points_computed_minimum,
+    //             innermost_loop_extent,
+    //             innermost_pure_loop_extent,
+    //             inner_parallelism,
+    //             outer_parallelism,
+    //             bytes_at_realization,
+    //             bytes_at_production,
+    //             bytes_at_root,
+    //             innermost_bytes_at_realization,
+    //             innermost_bytes_at_production,
+    //             innermost_bytes_at_root,
+    //             bytes_read_per_tile,
+    //             inlined_calls,
+    //             unique_bytes_read_per_realization,
+    //             unique_lines_read_per_realization,
+    //             allocation_bytes_read_per_realization,
+    //             working_set,
+    //             vector_size,
+    //             rounded_innermost_pure_loop_extent,
+    //             native_vector_size,
+    //             non_unique_bytes_read_per_realization,
+    //
+    //             total_element_compute_cost,
+    //             compute_cost_inlined, 
+    //             vector_overcompute_factor,
+    //             idle_core_wastage,
+    //             load_cold_cache_misses,
+    //             cost_of_cold_miss,
+    //             capacity_cache_misses,
+    //             cost_of_capacity_miss,
+    //             memory_load_cost,
+    //             store_cache_misses,
+    //             store_cost_of_miss,
+    //             memory_store_cost,
+    //             cache_line_wastage,
+    //             cost_of_mallocs,
+    //             cost_of_working_set,
+    //             compute_cost,
+    //             total_cost
+    //         };
+    //     } else {
+    //         jdata["num_realizations"]                      = num_realizations;
+    //         jdata["num_productions"]                       = num_productions;
+    //         jdata["points_computed_per_realization"]       = points_computed_per_realization;
+    //         jdata["points_computed_per_production"]        = points_computed_per_production;
+    //         jdata["points_computed_total"]                 = points_computed_total;
+    //         jdata["points_computed_minimum"]               = points_computed_minimum;
+    //         jdata["innermost_loop_extent"]                 = innermost_loop_extent;
+    //         jdata["innermost_pure_loop_extent"]            = innermost_pure_loop_extent;
+    //         jdata["inner_parallelism"]                     = inner_parallelism;
+    //         jdata["outer_parallelism"]                     = outer_parallelism;
+    //         jdata["bytes_at_realization"]                  = bytes_at_realization;
+    //         jdata["bytes_at_production"]                   = bytes_at_production;
+    //         jdata["bytes_at_root"]                         = bytes_at_root;
+    //         jdata["innermost_bytes_at_realization"]        = innermost_bytes_at_realization;
+    //         jdata["innermost_bytes_at_production"]         = innermost_bytes_at_production;
+    //         jdata["innermost_bytes_at_root"]               = innermost_bytes_at_root;
+    //         jdata["bytes_read_per_tile"]                   = bytes_read_per_tile;
+    //         jdata["inlined_calls"]                         = inlined_calls;
+    //         jdata["unique_bytes_read_per_realization"]            = unique_bytes_read_per_realization;
+    //         jdata["unique_lines_read_per_realization"]            = unique_lines_read_per_realization;
+    //         jdata["allocation_bytes_read_per_realization"] = allocation_bytes_read_per_realization;
+    //         jdata["working_set"]                           = working_set;
+    //         jdata["vector_size"]                           = vector_size;
+    //         jdata["rounded_innermost_pure_loop_extent"]    = rounded_innermost_pure_loop_extent;
+    //         jdata["native_vector_size"]                    = native_vector_size;
+    //         jdata["non_unique_bytes_read_per_realization"] = non_unique_bytes_read_per_realization;
+    //         jdata["total_element_compute_cost"] = total_element_compute_cost;
+    //         jdata["compute_cost_inlined"] = compute_cost_inlined;
+    //         jdata["vector_overcompute_factor"] = vector_overcompute_factor;
+    //         jdata["load_cold_cache_misses"] = load_cold_cache_misses;
+    //         jdata["cost_of_cold_miss"] = cost_of_cold_miss;
+    //         jdata["capacity_cache_misses"] = capacity_cache_misses;
+    //         jdata["cost_of_capacity_miss"] = cost_of_capacity_miss;
+    //         jdata["memory_load_cost"] = memory_load_cost;
+    //         jdata["store_cache_misses"] = store_cache_misses;
+    //         jdata["store_cost_of_miss"] = store_cost_of_miss;
+    //         jdata["memory_store_cost"] = memory_store_cost;
+    //         jdata["cache_line_wastage"] = cache_line_wastage;
+    //         jdata["cost_of_mallocs"] = cost_of_mallocs;
+    //         jdata["cost_of_working_set"] = cost_of_working_set;
+    //         jdata["compute_cost"] = compute_cost;
+    //         jdata["total_cost"] = total_cost;
+    //     }
+    //     return jdata;
+    // }
 }; // ScheduleFeatures
 
 } // namespace Internal
