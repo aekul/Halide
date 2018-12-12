@@ -3728,31 +3728,31 @@ struct State {
         StageMap<ScheduleFeatures> features;
         compute_featurization(dag, params, &features);
 
-        std::map<std::string, Expr> store_at_bounds;
-        std::map<std::string, Expr> compute_bounds;
-        std::map<std::string, Expr> compute_offsets;
-        std::map<std::string, std::map<std::string, Expr>> store_offsets;
-        std::map<std::string, Expr> compute_mins;
-        std::map<std::string, Expr> current_mins;
-        std::map<std::string, Expr> root_store_offsets;
-        std::map<std::string, int> strides;
-        std::map<std::string, double> parallelism;
-        std::map<std::string, AllocNode*> allocs;
-        std::set<std::string> alloced;
-
-        auto vars_and_schedule_data = apply_schedule(params, true);
-
-        root->create_loop_nest(dag, params, nullptr, 0, 0, 0, &loop_nest.block,
-            store_at_bounds, compute_bounds, strides, parallelism,
-            params.parallelism, features, vars_and_schedule_data.first,
-            vars_and_schedule_data.second, loop_nest.output_sizes, 0, allocs, alloced, compute_offsets, store_offsets, compute_mins, current_mins, root_store_offsets);
-
         json jdata;
-        std::vector<json> stage_dump = dump_featurization(dag, features);
-        jdata["loop"] = loop_nest.block.to_json();
-        jdata["stage"] = stage_dump;
-
         if (json_dump) {
+            std::map<std::string, Expr> store_at_bounds;
+            std::map<std::string, Expr> compute_bounds;
+            std::map<std::string, Expr> compute_offsets;
+            std::map<std::string, std::map<std::string, Expr>> store_offsets;
+            std::map<std::string, Expr> compute_mins;
+            std::map<std::string, Expr> current_mins;
+            std::map<std::string, Expr> root_store_offsets;
+            std::map<std::string, int> strides;
+            std::map<std::string, double> parallelism;
+            std::map<std::string, AllocNode*> allocs;
+            std::set<std::string> alloced;
+
+            auto vars_and_schedule_data = apply_schedule(params, true);
+
+            root->create_loop_nest(dag, params, nullptr, 0, 0, 0, &loop_nest.block,
+                store_at_bounds, compute_bounds, strides, parallelism,
+                params.parallelism, features, vars_and_schedule_data.first,
+                vars_and_schedule_data.second, loop_nest.output_sizes, 0, allocs, alloced, compute_offsets, store_offsets, compute_mins, current_mins, root_store_offsets);
+
+            std::vector<json> stage_dump = dump_featurization(dag, features);
+            jdata["loop"] = loop_nest.block.to_json();
+            jdata["stage"] = stage_dump;
+
             (*json_dump)["features"] = jdata;
         }
 

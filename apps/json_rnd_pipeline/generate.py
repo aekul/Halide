@@ -59,14 +59,14 @@ def get_machine_info():
   try:
     ret = subprocess.check_output("git rev-parse HEAD", shell=True)
     info[b"git_commit"] = ret
-  except CalledProcessError:
+  except subprocess.CalledProcessError:
     # unsuccessful call to git
     info[b"git_commit"] = None
 
   try:
     ret = subprocess.check_output("lscpu", shell=True)
     info[b"cpu_info"] = ret
-  except CalledProcessError:
+  except subprocess.CalledProcessError:
     # unsuccessful call to lscpu
     info[b"cpu_info"] = None
 
@@ -193,7 +193,11 @@ def main(args):
         start = time.time()
         try:
           start = time.time()
-          subprocess.check_output("numactl --cpunodebind=0 make bench", env=env, timeout=params.timeout, shell=True)
+          cmd = "make bench"
+          if not args.disable_numactl:
+            cmd = "numactl --cpunodebind=0 " + cmd
+
+          subprocess.check_output(cmd, env=env, timeout=params.timeout, shell=True)
           elapsed = time.time() - start
           print("    .Benchmarking {} took {:.2f}s".format(params, elapsed))
         except subprocess.CalledProcessError as e:
@@ -244,6 +248,8 @@ if __name__ == "__main__":
   parser.add_argument("--dropout", type=int, default=50)
   parser.add_argument("--beam_size", type=int, default=1)
   parser.add_argument("--timeout", type=float, default=20.0, help="in seconds")
+
+  parser.add_argument("--disable_numactl", action="store_true", default=False)
 
   # For distributed generation (to enseure that different nodes generate different
   # groups of programs)
