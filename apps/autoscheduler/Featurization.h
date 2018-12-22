@@ -5,6 +5,10 @@
 #include <iostream>
 #include <cstring>
 
+#include <json.hpp>
+
+using json = nlohmann::json;
+
 namespace Halide {
 namespace Internal {
 
@@ -127,6 +131,94 @@ struct PipelineFeatures {
         }
     }
 
+    json json_dump() const {
+        json jdata;
+        const char *type_names[] = {"Bool", "UInt8", "UInt16", "UInt32", "UInt64", "Float", "Double"};
+        for (int i = 0; i < (int)ScalarType::NumScalarTypes; i++) {
+
+            json jtype;
+
+            // Histogram of ops
+            json jhistogram;
+            jhistogram["constant"] = op_histogram[(int)OpType::Const][i];
+            jhistogram["cast"] = op_histogram[(int)OpType::Cast][i];
+            jhistogram["variable"] = op_histogram[(int)OpType::Variable][i];
+            jhistogram["param"] = op_histogram[(int)OpType::Param][i];
+            jhistogram["add"] = op_histogram[(int)OpType::Add][i];
+            jhistogram["sub"] = op_histogram[(int)OpType::Sub][i];
+            jhistogram["mod"] = op_histogram[(int)OpType::Mod][i];
+            jhistogram["mul"] = op_histogram[(int)OpType::Mul][i];
+            jhistogram["div"] = op_histogram[(int)OpType::Div][i];
+            jhistogram["min"] = op_histogram[(int)OpType::Min][i];
+            jhistogram["max"] = op_histogram[(int)OpType::Max][i];
+            jhistogram["eq"] = op_histogram[(int)OpType::EQ][i];
+            jhistogram["ne"] = op_histogram[(int)OpType::NE][i];
+            jhistogram["lt"] = op_histogram[(int)OpType::LT][i];
+            jhistogram["le"] = op_histogram[(int)OpType::LE][i];
+            jhistogram["and"] = op_histogram[(int)OpType::And][i];
+            jhistogram["or"] = op_histogram[(int)OpType::Or][i];
+            jhistogram["not"] = op_histogram[(int)OpType::Not][i];
+            jhistogram["select"] = op_histogram[(int)OpType::Select][i];
+            jhistogram["image_call"] = op_histogram[(int)OpType::ImageCall][i];
+            jhistogram["func_call"] = op_histogram[(int)OpType::FuncCall][i];
+            jhistogram["self_call"] = op_histogram[(int)OpType::SelfCall][i];
+            jhistogram["extern_call"] = op_histogram[(int)OpType::ExternCall][i];
+            jhistogram["let"] = op_histogram[(int)OpType::Let][i];
+            jtype["op_histogram"] = jhistogram;
+
+            // Memory access patterns. Columns are 
+            //  - calls to other Funcs,
+            //  - self-calls
+            //  - input image access
+            //  - and stores
+            json jmemory;
+            jmemory["pointwise"] = { 
+              pointwise_accesses[0][i],
+              pointwise_accesses[1][i],
+              pointwise_accesses[2][i],
+              pointwise_accesses[3][i] };
+            jmemory["transpose"] = { 
+              transpose_accesses[0][i],
+              transpose_accesses[1][i],
+              transpose_accesses[2][i],
+              transpose_accesses[3][i] };
+            jmemory["broadcast"] = { 
+              broadcast_accesses[0][i],
+              broadcast_accesses[1][i],
+              broadcast_accesses[2][i],
+              broadcast_accesses[3][i] };
+            jmemory["slice"] = { 
+              slice_accesses[0][i],
+              slice_accesses[1][i],
+              slice_accesses[2][i],
+              slice_accesses[3][i] };
+            jmemory["vectorizable"] = { 
+              vectorizable_accesses[0][i],
+              vectorizable_accesses[1][i],
+              vectorizable_accesses[2][i],
+              vectorizable_accesses[3][i] };
+            jmemory["strided"] = { 
+              strided_accesses[0][i],
+              strided_accesses[1][i],
+              strided_accesses[2][i],
+              strided_accesses[3][i] };
+            jmemory["scalar"] = { 
+              scalar_accesses[0][i],
+              scalar_accesses[1][i],
+              scalar_accesses[2][i],
+              scalar_accesses[3][i] };
+            jmemory["gather_scatter"] = { 
+              gather_scatter_accesses[0][i],
+              gather_scatter_accesses[1][i],
+              gather_scatter_accesses[2][i],
+              gather_scatter_accesses[3][i] };
+            jtype["memory_access_patterns"] = jmemory;
+
+            jdata[type_names[i]] = jtype;
+        } // Loop over types
+
+        return jdata;
+    }
 };
 
 
@@ -212,6 +304,41 @@ struct ScheduleFeatures {
                  << "    bytes_at_task:                         " << bytes_at_task << '\n'
                  << "    innermost_bytes_at_task:               " << innermost_bytes_at_task << '\n';
 
+    }
+
+    std::vector<int64_t> to_vector() const {
+        return {
+            num_realizations
+            , num_productions
+            , points_computed_per_realization
+            , points_computed_per_production
+            , points_computed_total
+            , points_computed_minimum
+            , innermost_loop_extent
+            , innermost_pure_loop_extent
+            , inner_parallelism
+            , outer_parallelism
+            , bytes_at_realization
+            , bytes_at_production
+            , bytes_at_root
+            , innermost_bytes_at_realization
+            , innermost_bytes_at_production
+            , innermost_bytes_at_root
+            , inlined_calls
+            , unique_bytes_read_per_realization
+            , unique_lines_read_per_realization
+            , allocation_bytes_read_per_realization
+            , working_set
+            , vector_size
+            , native_vector_size
+            , num_vectors
+            , num_scalars
+            , scalar_loads_per_vector
+            , vector_loads_per_vector
+            , scalar_loads_per_scalar
+            , bytes_at_task
+            , innermost_bytes_at_task
+        };
     }
 };
 

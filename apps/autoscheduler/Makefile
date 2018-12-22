@@ -37,9 +37,9 @@ $(BIN)/cost_model/%.a: $(BIN)/cost_model.generator
 # It's important to use dynamic lookups for undefined symbols here: all of libHalide
 # is expected to be present (in the loading binary), so we explicitly make the symbols
 # undefined rather than dependent on libHalide.so.
-$(BIN)/libauto_schedule.so: AutoSchedule.cpp DefaultCostModel.cpp FunctionDAG.h Featurization.h CostModel.h PerfectHashMap.h $(WEIGHT_OBJECTS) $(COST_MODEL_LIBS) $(GENERATOR_DEPS) $(BIN)/runtime.a
+$(BIN)/libauto_schedule.so: AutoSchedule.cpp DefaultCostModel.cpp FunctionDAG.h Featurization.h CostModel.h PerfectHashMap.h LoopNest.h LoopNest.cpp LoopNestFeaturizer.h LoopNestFeaturizer.cpp $(WEIGHT_OBJECTS) $(COST_MODEL_LIBS) $(GENERATOR_DEPS) $(BIN)/runtime.a
 	@mkdir -p $(@D)
-	$(CXX) -shared $(USE_EXPORT_DYNAMIC) -fPIC $(CXXFLAGS) -g -I $(BIN)/cost_model AutoSchedule.cpp DefaultCostModel.cpp $(WEIGHT_OBJECTS) $(COST_MODEL_LIBS) $(BIN)/runtime.a -O3 -o $@ $(HALIDE_SYSTEM_LIBS)
+	$(CXX) -shared $(USE_EXPORT_DYNAMIC) -fPIC $(CXXFLAGS) -g -I $(BIN)/cost_model AutoSchedule.cpp DefaultCostModel.cpp LoopNest.cpp LoopNestFeaturizer.cpp -I../../src $(WEIGHT_OBJECTS) $(COST_MODEL_LIBS) $(BIN)/runtime.a -O3 -o $@ $(HALIDE_SYSTEM_LIBS)
 
 $(BIN)/train_cost_model: train_cost_model.cpp DefaultCostModel.cpp CostModel.h NetworkSize.h $(COST_MODEL_LIBS) $(WEIGHT_OBJECTS) $(BIN)/runtime.a
 	$(CXX) $(CXXFLAGS) -Wall -I $(BIN)/cost_model -O3 $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(USE_OPEN_MP)

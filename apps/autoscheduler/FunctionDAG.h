@@ -185,6 +185,13 @@ void destroy<BoundContents>(const BoundContents *t) {
 
 namespace {
 
+struct SymbolicBound {
+    vector<pair<Expr, Expr>> region_computed;
+    vector<pair<Expr, Expr>> region_required;
+    // for each stage, symbolic loops over computed region for that stage
+    vector<vector<pair<Expr, Expr>>> loops;
+};
+
 // A representation of the function DAG. The nodes and edges are both
 // in reverse realization order, so if you want to walk backwards up
 // the DAG, just iterate the nodes or edges in-order.
@@ -224,6 +231,21 @@ struct FunctionDAG {
         };
         vector<RegionComputedInfo> region_computed;
         bool region_computed_all_common_cases = false;
+
+        void required_to_computed_symbolic(SymbolicBound* symbolic_bound) const {
+            map<string, Expr> required_symbolic_map;
+            for (int i = 0; i < func.dimensions(); i++) {
+                required_symbolic_map[region_required[i].min.as<Variable>()->name] = symbolic_bound->region_required[i].first;
+                required_symbolic_map[region_required[i].max.as<Variable>()->name] = symbolic_bound->region_required[i].second;
+            }
+            for (int i = 0; i < func.dimensions(); i++) {
+                Interval in_symbolic = region_computed[i].in;
+                in_symbolic.min = simplify(substitute(required_symbolic_map, in_symbolic.min));
+                in_symbolic.max = simplify(substitute(required_symbolic_map, in_symbolic.max));
+                symbolic_bound->region_computed.push_back({in_symbolic.min, in_symbolic.max});
+            }
+        }
+
 
         // Expand a region required into a region computed, using the
         // symbolic intervals above.
@@ -274,6 +296,23 @@ struct FunctionDAG {
             string accessor;
         };
 
+        void loop_nest_for_region_symbolic(int stage_idx, SymbolicBound* bound) const
+        {
+            const auto &s = stages[stage_idx];
+            map<string, Expr> computed_map;
+            for (int i = 0; i < func.dimensions(); i++) {
+                computed_map[region_required[i].min.as<Variable>()->name] = bound->region_computed[i].first;
+                computed_map[region_required[i].max.as<Variable>()->name] = bound->region_computed[i].second;
+            }
+
+            for (size_t i = 0; i < s.loop.size(); i++) {
+                const auto &l = s.loop[i];
+                Expr min = simplify(substitute(computed_map, l.min));
+                Expr max = simplify(substitute(computed_map, l.max));
+                bound->loops[stage_idx].push_back({min, max});
+            }
+
+        }
 
         // Get the loop nest shape as a function of the region computed
         void loop_nest_for_region(int stage_idx,
@@ -416,6 +455,47 @@ struct FunctionDAG {
         // The number of calls the consumer makes to the producer, per
         // point in the loop nest of the consumer.
         int calls;
+
+        void expand_footprint_symbolic(const pair<int64_t, int64_t> *consumer_loop, SymbolicBound* symbolic_bound) const {
+            // Create a map from the symbolic loop variables to the actual loop size
+            const auto &symbolic_loop = consumer->stages[consumer_stage].loop;
+            map<string, Expr> symbolic_vars;
+            for (size_t i = 0; i < symbolic_loop.size(); i++) {
+                const string &var = symbolic_loop[i].var;
+
+                std::ostringstream min_var_name;
+                min_var_name << consumer->func.name() << ".v" << i << ".min";
+                std::ostringstream max_var_name;
+                max_var_name << consumer->func.name() << ".v" << i << ".max";
+                Expr min_var = Variable::make(Int(32), min_var_name.str());
+                Expr max_var = Variable::make(Int(32), max_var_name.str());
+                symbolic_vars[consumer->func.name() + "." + var + ".min"] = min_var;
+                symbolic_vars[consumer->func.name() + "." + var + ".max"] = max_var;
+            }
+            // Apply that map to the bounds relationship encoded
+            // in the edge to expand the bounds of the producer to
+            // satisfy the consumer
+            for (int i = 0; i < producer->func.dimensions(); i++) {
+                // Get bounds required of this dimension of the
+                // producer in terms of a symbolic region of the
+                // consumer.
+
+                Interval in_symbolic{bounds[i].first.expr, bounds[i].second.expr};
+
+                if ((size_t)i >= symbolic_bound->region_required.size()) {
+                    symbolic_bound->region_required.push_back({in_symbolic.min, in_symbolic.max});
+                } else {
+                    symbolic_bound->region_required[i].first = min(
+                        symbolic_bound->region_required[i].first
+                        , in_symbolic.min
+                    );
+                    symbolic_bound->region_required[i].second = max(
+                        symbolic_bound->region_required[i].second
+                        , in_symbolic.max
+                    );
+                }
+            }
+        }
 
         // Given a loop nest of the consumer stage, expand a region
         // required of the producer to be large enough to include all
