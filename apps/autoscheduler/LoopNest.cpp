@@ -336,6 +336,10 @@ void LoopNode::dump(int indent_level) const {
   if (unrolled) {
     std::cout << " unrolled";
   }
+
+  if (vectorized) {
+    std::cout << " vectorized";
+  }
   std::cout << ":\n";
   body->dump(indent_level + 1);
 }

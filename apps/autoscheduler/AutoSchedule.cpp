@@ -756,7 +756,7 @@ struct LoopNest {
             func_vars.vars.pop_back();
         };
 
-        if (vars_map.contains(stage)) {
+        if (stage && vars_map.contains(stage)) {
             StageScheduleState& func_vars = *(vars_map.get(stage));
 
             // This is the first loop nest for this stage: compute the necessary
@@ -1951,7 +1951,7 @@ struct LoopNest {
             int64_t extent = 0;
             bool outermost = false, parallel = false, exists = false, pure = false;
             bool unrolled = false;
-            bool vectorized = true;
+            bool vectorized = false;
             TailStrategy tail_strategy = TailStrategy::Auto;
             FuncVar() : orig(Var()), var(Var()) {}
         };
@@ -2742,6 +2742,12 @@ struct State {
         debug(0) << schedule_source;
     }
 
+    json json_dump() const {
+        json jdata;
+        jdata["cost"] = cost;
+        return jdata;
+    }
+
     string schedule_source;
 
     pair<StageMap<std::unique_ptr<LoopNest::StageScheduleState>>, LoopNest::ScheduleData> apply_schedule(const FunctionDAG &dag, const MachineParams &params, bool obtain_loop_nest_only = false) {
@@ -2849,7 +2855,6 @@ struct State {
                         }
                         first = false;
                         p.second->schedule_source << v.var.name();
-                        func_vars.push_back(v);
                     }
                 }
                 p.second->schedule_source << ")";
@@ -2857,6 +2862,8 @@ struct State {
                     stage.reorder(vars);
                 }
             }
+
+            p.second->vars = func_vars;
 
             debug(0) << any_parallel_vars << " " << any_parallel_rvars << "\n";
 
@@ -3330,6 +3337,11 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
 
     IntrusivePtr<State> optimal;
 
+    json jdata;
+    jdata["schedule_seed"] = seed;
+    jdata["beam_size"] = beam_size;
+    jdata["autoschedule_timelimit"] = time_limit;
+
     if (time_limit) {
         // Use a fixed running time
         auto start = std::chrono::steady_clock::now();
@@ -3353,12 +3365,19 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
 
     debug(0) << "** Optimal schedule:\n";
 
+    string json_path = get_env_variable("HL_JSON_DUMP");
+
     // Just to get the debugging prints to fire
     LoopNestRoot loop_nest;
-    optimal->calculate_cost(dag, params, cost_model.get(), loop_nest, true);
+    if (json_path.empty()) {  // do not store json dump
+        optimal->calculate_cost(dag, params, cost_model.get(), loop_nest, true);
+    } else {
+        optimal->calculate_cost(dag, params, cost_model.get(), loop_nest, true, &jdata);
+    }
 
     // Apply the schedules
     optimal->apply_schedule(dag, params);
+    loop_nest.dump();
 
     // Print out the schedule
     optimal->dump();
@@ -3372,6 +3391,14 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
           << "// --- END machine-generated schedule\n";
         f.close();
         internal_assert(!f.fail()) << "Failed to write " << schedule_file;
+    }
+
+    if (!json_path.empty()) {
+        jdata["optimal_schedule"] = optimal->json_dump();
+        jdata["optimal_schedule"]["cost_evaluations"] = State::cost_calculations;
+        std::ofstream json_file(json_path, std::ios::binary);
+        std::vector<std::uint8_t> msgpack_data = json::to_msgpack(jdata);
+        json_file.write(reinterpret_cast<char*>(msgpack_data.data()), msgpack_data.size() * sizeof(std::uint8_t));
     }
 
     // Print out the predicted runtime of each Func, so we can compare them to a profile
