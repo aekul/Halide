@@ -2834,6 +2834,7 @@ struct State {
                 any_parallel_vars |= !it->var.is_rvar;
                 parallel_tasks *= it->extent;
                 parallel_vars.push_back(it->var);
+                it->unrolled = false;
                 debug(0) << "Parallel var: " << it->var.name() << " " << it->var.is_rvar << "\n";
             }
 
@@ -3378,6 +3379,11 @@ std::string generate_schedules_new(const std::vector<Function> &outputs,
     // Apply the schedules
     optimal->apply_schedule(dag, params);
     loop_nest.dump();
+
+    string loop_nest_test_mode = get_env_variable("HL_LOOP_NEST_TEST_MODE");
+    if (atoi(loop_nest_test_mode.c_str())) {
+        internal_assert(loop_nest.matches_pipeline_loop_nest(outputs));
+    }
 
     // Print out the schedule
     optimal->dump();

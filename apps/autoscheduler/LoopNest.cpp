@@ -340,6 +340,7 @@ void LoopNode::dump(int indent_level) const {
   if (vectorized) {
     std::cout << " vectorized";
   }
+
   std::cout << ":\n";
   body->dump(indent_level + 1);
 }
@@ -435,8 +436,13 @@ void PipelineLoop::print(int depth) {
   if (parallel) {
     std::cout << " parallel";
   }
+
   if (unrolled) {
     std::cout << " unrolled";
+  }
+
+  if (vectorized) {
+    std::cout << " vectorized";
   }
 
   std::cout << ":\n";
@@ -624,11 +630,11 @@ bool LoopNestRoot::matches_pipeline_loop_nest(const std::vector<Function> &outpu
   std::cout << "loop nest: \n";
   dump();
 
-  std::vector<std::shared_ptr<PipelineLoop>> lowered_loops = get_lowered_loops(outputs);
-  std::cout << "\nlowered: \n";
-  for (const auto& l : lowered_loops) {
-    l->print();
-  }
+  //std::vector<std::shared_ptr<PipelineLoop>> lowered_loops = get_lowered_loops(outputs);
+  //std::cout << "\nlowered: \n";
+  //for (const auto& l : lowered_loops) {
+    //l->print();
+  //}
 
   const auto& pipeline_loops = PipelineLoop::create(lines);
   const auto& block_loops = block.create_pipeline_loop_nest();
