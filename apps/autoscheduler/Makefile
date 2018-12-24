@@ -77,6 +77,10 @@ $(BIN)/test: test.cpp $(BIN)/libauto_schedule.so
 test: $(BIN)/test
 	HL_WEIGHTS_DIR=weights LD_LIBRARY_PATH=$(BIN) $(BIN)/test
 
+$(BIN)/random.generator: ../random_pipeline/random_pipeline_generator.cpp $(GENERATOR_DEPS) $(BIN)/libauto_schedule.so
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(USE_EXPORT_DYNAMIC) -g $(filter-out %.h,$^) -o $@ $(LDFLAGS) $(HALIDE_SYSTEM_LIBS)
+
 clean:
 	rm -rf $(BIN)
 
