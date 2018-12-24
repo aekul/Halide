@@ -19,10 +19,11 @@ def build(pipeline_id, num_schedules, hl_threads):
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
   parser.add_argument("--ip", help="server ip", type=str, required=True)
+  parser.add_argument("--password", help="server password", type=str, required=True)
   args = parser.parse_args()
 
   listen = ["default"]
-  conn = redis.from_url("redis://:@{}:6379".format(args.ip))
+  conn = redis.from_url("redis://:{}@{}:6379".format(args.password, args.ip))
   with Connection(conn):
     worker = Worker(map(Queue, listen))
     worker.work()
