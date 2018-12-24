@@ -95,12 +95,24 @@ benchmark_sample() {
         --benchmark_min_time=1 \
             | tee ${D}/bench.txt
 
+    rm ${D}/bench
+
     # Add the runtime, pipeline id, and schedule id to the feature file
     R=$(cut -d' ' -f8 < ${D}/bench.txt)
-    python3 merge_bench.py --data_dir ${D} --id ${SEED} --num_stages ${STAGES} --time ${R} 
-    cp $(printf "%s.mp" ${D}/${SEED}) ${DATA_DIR}/
 
-    rm ${D}/bench
+    if [ -z ${R} ]; then
+        return
+    fi
+
+    python3 merge_bench.py --data_dir ${D} --id ${SEED} --num_stages ${STAGES} --time ${R} 
+
+    F=$(printf "%s.mp" ${D}/${SEED})
+
+    if [ ! -f  ${F}]; then
+        return
+    fi
+
+    cp ${F} ${DATA_DIR}/
 }
 
 i=${PIPELINE_ID}
