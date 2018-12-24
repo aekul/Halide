@@ -108,7 +108,7 @@ benchmark_sample() {
 
     F=$(printf "%s.mp" ${D}/${SEED})
 
-    if [ ! -f  ${F}]; then
+    if [ ! -f  ${F} ]; then
         return
     fi
 

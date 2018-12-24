@@ -14,7 +14,7 @@ def main(args):
   q = Queue(connection=redis_conn)
 
   for p in range(args.pipelines):
-    q.enqueue(generate_worker.build, p, args.schedules, args.hl_threads)
+    q.enqueue(generate_worker.build, p, args.schedules, args.hl_threads, timeout=600)
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
