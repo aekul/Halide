@@ -278,6 +278,18 @@ struct FunctionDAG {
         vector<RegionComputedInfo> region_computed;
         bool region_computed_all_common_cases = false;
 
+        std::set<const Edge*> get_incoming_edges() const {
+            std::set<const Edge*> incoming_edges;
+            for (const auto& node : dag->nodes) {
+                for (const auto& edge : node.outgoing_edges) {
+                    if (edge->consumer->node == this) {
+                        incoming_edges.insert(edge);
+                    } 
+                }
+            }
+            return incoming_edges;
+        }
+
         void required_to_computed_symbolic(SymbolicBound* symbolic_bound) const {
             map<string, Expr> required_symbolic_map;
             for (int i = 0; i < func.dimensions(); i++) {
@@ -506,19 +518,19 @@ struct FunctionDAG {
 
         void expand_footprint_symbolic(const pair<int64_t, int64_t> *consumer_loop, SymbolicBound* symbolic_bound) const {
             // Create a map from the symbolic loop variables to the actual loop size
-            const auto &symbolic_loop = consumer->stages[consumer_stage].loop;
+            const auto &symbolic_loop = consumer->loop;
             map<string, Expr> symbolic_vars;
             for (size_t i = 0; i < symbolic_loop.size(); i++) {
                 const string &var = symbolic_loop[i].var;
 
                 std::ostringstream min_var_name;
-                min_var_name << consumer->func.name() << ".v" << i << ".min";
+                min_var_name << consumer->node->func.name() << ".v" << i << ".min";
                 std::ostringstream max_var_name;
-                max_var_name << consumer->func.name() << ".v" << i << ".max";
+                max_var_name << consumer->node->func.name() << ".v" << i << ".max";
                 Expr min_var = Variable::make(Int(32), min_var_name.str());
                 Expr max_var = Variable::make(Int(32), max_var_name.str());
-                symbolic_vars[consumer->func.name() + "." + var + ".min"] = min_var;
-                symbolic_vars[consumer->func.name() + "." + var + ".max"] = max_var;
+                symbolic_vars[consumer->node->func.name() + "." + var + ".min"] = min_var;
+                symbolic_vars[consumer->node->func.name() + "." + var + ".max"] = max_var;
             }
             // Apply that map to the bounds relationship encoded
             // in the edge to expand the bounds of the producer to
@@ -543,6 +555,7 @@ struct FunctionDAG {
                     );
                 }
             }
+        }
 
         // What is the derivative of the coordinate accessed in the
         // producer w.r.t the loops of the consumer. Either a constant

@@ -471,7 +471,7 @@ struct LoopNest {
 
     int64_t get_non_unique_bytes_read_per_point(const FunctionDAG::Node * f) const {
         int64_t non_unique_bytes_read_per_point = 0;
-        for (const auto *e : f->incoming_edges) {
+        for (const auto *e : f->get_incoming_edges()) {
             if (inlined.contains(e->producer)) {
                 non_unique_bytes_read_per_point += get_non_unique_bytes_read_per_point(e->producer);
                 continue;
@@ -494,7 +494,7 @@ struct LoopNest {
             const auto& n = pending.back();
             pending.pop_back();
 
-            const auto &next = n->incoming_edges;
+            const auto &next = n->get_incoming_edges();
 
             for (const auto *e : next) {
                 if (inlined.contains(e->producer)) {
@@ -1339,11 +1339,11 @@ struct LoopNest {
 
             for (const auto *e : f->outgoing_edges) {
                 // Ignore consumers outside of this loop nest
-                if (!computes(e->consumer) && ignore_outside_consumers) {
+                if (!computes(e->consumer->node) && ignore_outside_consumers) {
                     continue;
                 }
-                const auto &c_bounds = get_bounds(e->consumer, ignore_outside_consumers);
-                const auto *consumer_loop = &(c_bounds->loops(e->consumer_stage, 0)); // For the concrete sizes of the loop
+                const auto &c_bounds = get_bounds(e->consumer->node, ignore_outside_consumers);
+                const auto *consumer_loop = &(c_bounds->loops(e->consumer->index, 0)); // For the concrete sizes of the loop
                 e->expand_footprint_symbolic(consumer_loop, symbolic_bound.get());
             }
         }
