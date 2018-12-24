@@ -43,8 +43,6 @@ make_sample() {
         beam=1
     fi
 
-    echo Compile ${SEED}
-
     HL_PERMIT_FAILED_UNROLL=1 \
         HL_MACHINE_PARAMS=${HL_NUM_THREADS},1,1 \
         HL_SEED=${SEED} \
@@ -84,7 +82,9 @@ benchmark_sample() {
     D=${1}
     SEED=${2}
 
-    echo Benchmark ${SEED}
+    if [ ! -f ${D}/bench ]; then
+        return
+    fi
 
     HL_NUM_THREADS=${HL_NUM_THREADS} \
         ${D}/bench \
