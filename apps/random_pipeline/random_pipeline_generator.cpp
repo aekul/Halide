@@ -368,19 +368,17 @@ public:
     }
 
     Stage convolve2D(Stage f, int kernel_min, int kernel_max) {
-        Stage clamped = {BoundaryConditions::repeat_edge(f.func), f.w, f.h, f.c};
         int conv_type = rand_int(0,2);
-        if (conv_type == 0) return convolve2D_unrolled(clamped, kernel_min, kernel_max);
-        if (conv_type == 1) return convolve2D_w(clamped, kernel_min, kernel_max);
-        else return convolve2D_r(clamped, kernel_min, kernel_max);
+        if (conv_type == 0) return convolve2D_unrolled(f, kernel_min, kernel_max);
+        if (conv_type == 1) return convolve2D_w(f, kernel_min, kernel_max);
+        else return convolve2D_r(f, kernel_min, kernel_max);
     }
 
     Stage pool2D(Stage f, int kernel_min, int kernel_max) {
-        Stage clamped = {BoundaryConditions::repeat_edge(f.func), f.w, f.h, f.c};
         int pool_type = rand_int(0,2);
-        if (pool_type == 0) return pool2D_unrolled(clamped, kernel_min, kernel_max);
-        if (pool_type == 1) return pool2D_w(clamped, kernel_min, kernel_max);
-        else return pool2D_r(clamped, kernel_min, kernel_max);
+        if (pool_type == 0) return pool2D_unrolled(f, kernel_min, kernel_max);
+        if (pool_type == 1) return pool2D_w(f, kernel_min, kernel_max);
+        else return pool2D_r(f, kernel_min, kernel_max);
     }
 
     Stage activation(Stage f) {
@@ -1022,13 +1020,27 @@ public:
         int m = (int)s.size() - 1;
         int i2 = m > 0 ? rand_int(0, m - 1) : 0;
         int i1 = m > 0 ? rand_int(i2 + 1, m) : 0;
-        Stage f = s[i1], g = s[i2];
+
+        Stage f_unclamped = s[i1], g_unclamped = s[i2];
 
         // generate stage based on transition probabilities
         int stage_type = CDF.sample_cdf(curr_stage_id);
         // set current stage id to the chosen stage for next iteration
         curr_stage_id = stage_type;
 
+        std::vector<std::pair<Expr, Expr>> bounds;
+        bounds.push_back({0, f_unclamped.w});
+        bounds.push_back({0, f_unclamped.h});
+        bounds.push_back({0, f_unclamped.c});
+        Expr f_zero = cast(f_unclamped.func.value().type(), 0);
+        Stage f = {BoundaryConditions::constant_exterior(f_unclamped.func, f_zero, bounds), f_unclamped.w, f_unclamped.h, f_unclamped.c};
+
+        bounds.clear();
+        bounds.push_back({0, g_unclamped.w});
+        bounds.push_back({0, g_unclamped.h});
+        bounds.push_back({0, g_unclamped.c});
+        Expr g_zero = cast(g_unclamped.func.value().type(), 0);
+        Stage g = {BoundaryConditions::constant_exterior(g_unclamped.func, g_zero, bounds), g_unclamped.w, g_unclamped.h, g_unclamped.c};
 
         if (stage_type == 0) {
             int dim = rand_int(0, 1);
