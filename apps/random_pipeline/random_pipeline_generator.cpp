@@ -199,15 +199,24 @@ public:
     GeneratorParam<int> max_stages{"max_stages", 20};
 
     Input<Buffer<float>>  input{"input", 3};
-    Input<Buffer<uint8_t>>  uint8_weights {"uint8_weights", 4};
+    Input<Buffer<uint8_t>>  uint8_weights{"uint8_weights", 4};
     Input<Buffer<uint16_t>>  uint16_weights{"uint16_weights", 4};
     Input<Buffer<uint32_t>>  uint32_weights{"uint32_weights", 4};
-    Input<Buffer<int8_t>>  int8_weights {"int8_weights", 4};
+    Input<Buffer<int8_t>>  int8_weights{"int8_weights", 4};
     Input<Buffer<int16_t>>  int16_weights{"int16_weights", 4};
     Input<Buffer<int32_t>>  int32_weights{"int32_weights", 4};
     Input<Buffer<float>>  float32_weights{"float32_weights", 4};
 
     Output<Buffer<float>> output{"output", 3};
+
+    Func input_clamped;
+    Func uint8_weights_clamped;
+    Func uint16_weights_clamped;
+    Func uint32_weights_clamped;
+    Func int8_weights_clamped;
+    Func int16_weights_clamped;
+    Func int32_weights_clamped;
+    Func float32_weights_clamped;
 
     void set_upcast_types(Type input_type, Type& mult_type, Type& sum_type) {
         if (input_type.is_int() && rand_int(0,1)) {
@@ -236,15 +245,15 @@ public:
     }
 
     Func get_conv_weights(Type t) {
-        if (t == UInt(8)) return uint8_weights;
-        else if (t == UInt(16)) return uint16_weights;
-        else if (t == UInt(32)) return uint32_weights;
-        else if (t == Int(8)) return int8_weights;
-        else if (t == Int(16)) return int16_weights;
-        else if (t == Int(32)) return int32_weights;
+        if (t == UInt(8)) return uint8_weights_clamped;
+        else if (t == UInt(16)) return uint16_weights_clamped;
+        else if (t == UInt(32)) return uint32_weights_clamped;
+        else if (t == Int(8)) return int8_weights_clamped;
+        else if (t == Int(16)) return int16_weights_clamped;
+        else if (t == Int(32)) return int32_weights_clamped;
         else {
             assert(t == Float(32));
-            return float32_weights;
+            return float32_weights_clamped;
         }
     }
 
@@ -607,6 +616,7 @@ public:
         Type mult_type, sum_type;
         Type input_type = f.func.value().type();
         Func weights = get_conv_weights(input_type);
+
         set_upcast_types(input_type, mult_type, sum_type);
 
         int stride = f.random_size_reduce_factor();
@@ -1149,6 +1159,33 @@ public:
         }
     }
 
+    template <typename T>
+    Func clamp3(const Input<Buffer<T>>& buffer) {
+        return BoundaryConditions::constant_exterior(
+            buffer 
+            , cast(buffer.type(), 0)
+            , {
+                {buffer.dim(0).min(), buffer.dim(0).extent()}
+                , {buffer.dim(1).min(), buffer.dim(1).extent()}
+                , {buffer.dim(2).min(), buffer.dim(2).extent()}
+            }
+        );
+    }
+
+    template <typename T>
+    Func clamp4(const Input<Buffer<T>>& buffer) {
+        return BoundaryConditions::constant_exterior(
+            buffer 
+            , cast(buffer.type(), 0)
+            , {
+                {buffer.dim(0).min(), buffer.dim(0).extent()}
+                , {buffer.dim(1).min(), buffer.dim(1).extent()}
+                , {buffer.dim(2).min(), buffer.dim(2).extent()}
+                , {buffer.dim(3).min(), buffer.dim(3).extent()}
+            }
+        );
+    }
+
     void generate() {
         rng.seed((int)seed);
 
@@ -1162,8 +1199,17 @@ public:
 
         Var x("x"), y("y"), c("c");
 
+        input_clamped = clamp3(input);
+        uint8_weights_clamped = clamp4(uint8_weights);
+        uint16_weights_clamped = clamp4(uint16_weights);
+        uint32_weights_clamped = clamp4(uint32_weights);
+        int8_weights_clamped = clamp4(int8_weights);
+        int16_weights_clamped = clamp4(int16_weights);
+        int32_weights_clamped = clamp4(int32_weights);
+        float32_weights_clamped = clamp4(float32_weights);
+
         Func first;
-        first(x, y, c) = input(x, y, c);
+        first(x, y, c) = input_clamped(x, y, c);
 
         vector<Stage> stages;
         // Assume input starts at ~2000x2000
