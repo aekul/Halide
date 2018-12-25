@@ -368,17 +368,19 @@ public:
     }
 
     Stage convolve2D(Stage f, int kernel_min, int kernel_max) {
+        Stage clamped = {BoundaryConditions::repeat_edge(f.func), f.w, f.h, f.c};
         int conv_type = rand_int(0,2);
-        if (conv_type == 0) return convolve2D_unrolled(f, kernel_min, kernel_max);
-        if (conv_type == 1) return convolve2D_w(f, kernel_min, kernel_max);
-        else return convolve2D_r(f, kernel_min, kernel_max);
+        if (conv_type == 0) return convolve2D_unrolled(clamped, kernel_min, kernel_max);
+        if (conv_type == 1) return convolve2D_w(clamped, kernel_min, kernel_max);
+        else return convolve2D_r(clamped, kernel_min, kernel_max);
     }
 
     Stage pool2D(Stage f, int kernel_min, int kernel_max) {
+        Stage clamped = {BoundaryConditions::repeat_edge(f.func), f.w, f.h, f.c};
         int pool_type = rand_int(0,2);
-        if (pool_type == 0) return pool2D_unrolled(f, kernel_min, kernel_max);
-        if (pool_type == 1) return pool2D_w(f, kernel_min, kernel_max);
-        else return pool2D_r(f, kernel_min, kernel_max);
+        if (pool_type == 0) return pool2D_unrolled(clamped, kernel_min, kernel_max);
+        if (pool_type == 1) return pool2D_w(clamped, kernel_min, kernel_max);
+        else return pool2D_r(clamped, kernel_min, kernel_max);
     }
 
     Stage activation(Stage f) {
